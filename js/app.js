@@ -489,7 +489,7 @@
         else if (ant) corpo = `<div class="file"><label><input type="checkbox" data-ant="${k}" ${ant.usar ? 'checked' : ''}> Reaproveitar <b>${esc(ant.arquivo_nome)}</b></label><div class="sm mut">enviado em ${dataHora(ant.enviado_em)} por ${esc(nomeUsuario(ant.enviado_por))}</div></div>`;
         return `<div class="drop" data-slot="${k}"><h3>${esc(t)}</h3><div class="hint">${esc(h)}</div>${corpo}<div><label class="bt2" style="cursor:pointer">Escolher arquivo<input type="file" hidden data-in="${k}" accept=".pdf,.xlsx,.xls,.xlsm,.txt,.csv,.jpg,.jpeg,.png"></label></div></div>`;
       }).join('');
-      $('#catInfo').innerHTML = CAT ? `Catálogo vigente: <b>${esc(CAT.meta.arquivo)}</b> (gerado em ${dataHora(CAT.meta.geradoEm)}, ${CAT.meta.total} produtos). <a href="#catalogo">Atualizar catálogo</a>` : `<span style="color:var(--err)">Nenhum catálogo carregado: a conferência por item no catálogo não será feita. <a href="#catalogo">Carregar catálogo</a></span>`;
+      $('#catInfo').innerHTML = CAT ? `Catálogo vigente: <b>${esc(CAT.meta.arquivo)}</b> (gerado em ${dataHora(CAT.meta.geradoEm)}, ${CAT.meta.total} produtos). <a href="#catalogo">Atualizar catálogo</a>` : `<span style="color:var(--err);font-weight:700">Nenhum catálogo carregado: a análise só roda depois de carregar o JSON do catálogo. <a href="#catalogo">Carregar catálogo</a></span>`;
     };
     const atribuir = async (files, alvo) => {
       for (const f of files) {
@@ -519,7 +519,13 @@
       S.anteriores = {};
       $$('.novo').forEach(e => e.classList.toggle('hide', !!S.proc));
       if (!S.proc) return desenharSlots();
-      const docs = await dados(sb.from('confere_documentos').select('id,tipo,arquivo_nome,enviado_por,enviado_em,storage_path,arquivo_hash').eq('processo_id', S.proc).order('enviado_em', { ascending: false }));
+      const [docsTodos, ans] = await Promise.all([
+        dados(sb.from('confere_documentos').select('id,tipo,arquivo_nome,enviado_por,enviado_em,storage_path,arquivo_hash').eq('processo_id', S.proc).order('enviado_em', { ascending: false })),
+        dados(sb.from('confere_analises').select('fase,documentos').eq('processo_id', S.proc))
+      ]);
+      // invoice e packing da fase 1 podem mudar até o registro: só reaproveita o que já foi usado nesta mesma fase
+      const daFase = new Set(ans.filter(a => a.fase === S.fase).flatMap(a => (a.documentos || []).map(d => d.id)));
+      const docs = docsTodos.filter(d => daFase.has(d.id));
       for (const d of docs) {
         const alvo = d.tipo === 'invoice_packing' ? ['invoice'] : [d.tipo];
         alvo.forEach(k => { if (!S.anteriores[k]) S.anteriores[k] = Object.assign({ usar: true }, d); });
@@ -528,7 +534,7 @@
       desenharSlots();
     };
     $('#nProc').onchange = () => { S.proc = $('#nProc').value; carregarAnteriores(); };
-    $$('input[name=fase]').forEach(i => i.onchange = () => { S.fase = i.value; marcarFase(); });
+    $$('input[name=fase]').forEach(i => i.onchange = () => { S.fase = i.value; marcarFase(); carregarAnteriores(); });
     const drops = $('#drops');
     drops.addEventListener('dragover', e => { e.preventDefault(); const d = e.target.closest('.drop'); $$('.drop').forEach(x => x.classList.toggle('on', x === d)); });
     drops.addEventListener('dragleave', e => { if (!drops.contains(e.relatedTarget)) $$('.drop').forEach(x => x.classList.remove('on')); });
@@ -584,6 +590,7 @@
       }
       if (S.fase === 'pre_alerta' && !docs.invoice && !docs.packing && !docs.bl) throw new Error('Envie ao menos a invoice, o packing list ou o draft do HBL.');
       if (S.fase === 'pre_registro' && !docs.txt) throw new Error('Na fase de pré-registro o TXT do TOTVS é obrigatório.');
+      if (!CAT) throw new Error('Carregue o catálogo de produtos (JSON do Portal Único) antes de rodar: sem ele os itens não são confrontados com o catálogo. Menu Catálogo de produtos.');
       // processo
       passo('Preparando o processo…');
       if (!proc) {
@@ -681,8 +688,8 @@
       <div class="acts"><button class="bt" id="bPdf">Emitir parecer (PDF)</button><button class="bt2" id="bTxt">Copiar texto do parecer</button><button class="bt2" onclick="location.hash='p-${p.id}'">Abrir processo</button><button class="bt2" onclick="location.hash='nova-${p.id}'">Nova análise</button></div></div>
       <div id="decisao"></div>
       <div class="kpis"><div class="kpi"><b>${rs.bloqueantes || 0}</b><span>Bloqueantes</span></div><div class="kpi"><b>${rs.alertas || 0}</b><span>Alertas</span></div><div class="kpi"><b>${rs.infos || 0}</b><span>Informativos</span></div><div class="kpi"><b>${rs.itens || 0}</b><span>Itens conferidos${rs.itensComPendencia ? ` (${rs.itensComPendencia} com pendência)` : ''}</span></div></div>
-      <div class="tabs2"><button class="on" data-t="oc">Ocorrências (${ocs.length})</button><button data-t="it">Itens (${(r.itens || []).length})</button><button data-t="dc">Documentos lidos</button></div>
-      <div id="tOc"></div><div id="tIt" class="hide"></div><div id="tDc" class="hide"></div>`;
+      <div class="tabs2"><button class="on" data-t="oc">Ocorrências (${ocs.length})</button><button data-t="it">Itens (${(r.itens || []).length})</button><button data-t="ct">Catálogo</button><button data-t="dc">Documentos lidos</button></div>
+      <div id="tOc"></div><div id="tIt" class="hide"></div><div id="tCt" class="hide"></div><div id="tDc" class="hide"></div>`;
     const desenharDecisao = () => {
       const el = $('#decisao');
       if (a.decisao) el.innerHTML = `<div class="banner ${a.decisao === 'seguir' ? 'ok' : 'er'}"><div><div class="t">Decisão: ${a.decisao === 'seguir' ? 'seguir com o processo' : 'não seguir até os ajustes'}</div><div class="d">${esc(nomeUsuario(a.decisao_por))} · ${dataHora(a.decisao_em)}${a.decisao_nota ? ' · ' + esc(a.decisao_nota) : ''}</div></div><button class="bt2" id="bDec">Alterar decisão</button></div>`;
@@ -725,7 +732,34 @@
     const dl = r.documentos || {};
     const kv = o => `<dl class="kv">${Object.entries(o).filter(([, v]) => v != null && v !== '' && typeof v !== 'object').map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join('')}</dl>`;
     $('#tDc').innerHTML = Object.entries(dl).filter(([, v]) => v).map(([k, v]) => `<div class="card"><h2>${esc(R.DOCS[k] || k)}</h2>${kv(Object.assign({}, v, v.totais ? { 'qtd total': U.fmtAuto(v.totais.qtd), 'peso líquido': U.fmt(v.totais.pesoLiq), 'peso bruto': U.fmt(v.totais.pesoBruto), 'valor total': U.fmt(v.totais.total != null ? v.totais.total : v.totais.totalMoeda) } : {}, v.frete ? { frete: `${v.frete.moeda || ''} ${U.fmt(v.frete.valor)}` } : {}, v.seguro ? { seguro: `${v.seguro.moeda || ''} ${U.fmt(v.seguro.valor)}` } : {}, v.volumes ? { volumes: `${v.volumes.qtd} ${v.volumes.especie || ''}` } : {}, v.ncms ? { ncms: v.ncms.join(', ') } : {}))}</div>`).join('') || '<div class="empty">Sem dados.</div>';
-    $$('.tabs2 button').forEach(b => b.onclick = () => { $$('.tabs2 button').forEach(x => x.classList.toggle('on', x === b)); $('#tOc').classList.toggle('hide', b.dataset.t !== 'oc'); $('#tIt').classList.toggle('hide', b.dataset.t !== 'it'); $('#tDc').classList.toggle('hide', b.dataset.t !== 'dc'); });
+    // confronto item a item com o catálogo (gestão de catálogo)
+    const ST = { ativo: 'Ativo', multiplos: 'Mais de um produto ativo', desativado: 'Só produto desativado', nao_encontrado: 'Não cadastrado' };
+    const linhasCat = it.filter(o => !o.codigo.startsWith('#')).map(o => {
+      const c = o.catalogo || {}, p = c.produto || {};
+      const ncmDocs = [...new Set([].concat(o.invoice ? o.invoice.ncms : [], o.txt ? o.txt.ncms : [], o.diferimento ? o.diferimento.ncms : []))];
+      const ocsItem = ocs.filter(x => x.item && U.normCod(x.item) === U.normCod(o.codigo) && /^CAT-|^ITM-02/.test(x.regra) && x.status !== 'substituida');
+      const cf = o.comparacaoFatura;
+      return { codigo: o.codigo, situacao: c.status ? ST[c.status] : 'Sem catálogo', produto: p.codigo ? `${p.codigo} v${p.versao}` : '', ativos: (c.ativos || []).map(a => a.codigo).join(', '), ncmCatalogo: p.ncm || '', ncmDocs: ncmDocs.join(', '), ncmOk: !p.ncm || !ncmDocs.length || ncmDocs.every(n => n === p.ncm), semelhanca: cf ? Math.round(cf.similaridade * 100) : null, faltamNoCatalogo: cf ? cf.faltamNoCatalogo.map(t => t.valor).join('; ') : '', faltamNaFatura: cf ? cf.faltamNaFatura.map(t => t.valor).join('; ') : '', ocorrencias: ocsItem.map(x => x.regra).join(', '), status: c.status };
+    });
+    const qt = k => linhasCat.filter(l => l.status === k).length;
+    $('#tCt').innerHTML = !r.resumo || !r.resumo.catalogo ? '<div class="card empty">Esta análise rodou sem catálogo carregado. Carregue o JSON em Catálogo de produtos e rode uma nova análise.</div>' :
+      `<p class="cs">Confronto de cada código interno do processo com o catálogo de ${dataHora(r.resumo.catalogo.geradoEm)} (${esc(r.resumo.catalogo.arquivo)}).</p>
+      <div class="kpis"><div class="kpi"><b>${qt('ativo')}</b><span>Ativos</span></div><div class="kpi"><b>${qt('nao_encontrado')}</b><span>Não cadastrados</span></div><div class="kpi"><b>${qt('desativado')}</b><span>Só desativado</span></div><div class="kpi"><b>${qt('multiplos')}</b><span>Mais de um ativo</span></div><div class="kpi"><b>${linhasCat.filter(l => !l.ncmOk).length}</b><span>NCM do catálogo diferente</span></div></div>
+      <div class="acts" style="margin:8px 0"><select class="in" id="fCt" style="max-width:260px"><option value="">Todos os itens</option><option value="pend">Só com pendência</option><option value="nao_encontrado">Não cadastrados</option><option value="desativado">Só desativado</option><option value="multiplos">Mais de um ativo</option><option value="ncm">NCM diferente</option></select><button class="bt2" id="bCtX">Baixar planilha (.xlsx)</button></div>
+      <div class="tbw"><table class="tb"><thead><tr><th>Código interno</th><th>Situação no catálogo</th><th>Produto</th><th>NCM catálogo</th><th>NCM documentos</th><th class="num">Semelhança descrição</th><th>Na invoice e não no catálogo</th><th>No catálogo e não na invoice</th><th>Ocorrências</th></tr></thead><tbody id="tCtB"></tbody></table></div>`;
+    const desenharCat = () => {
+      const f = $('#fCt') ? $('#fCt').value : '';
+      const l = linhasCat.filter(x => !f || (f === 'pend' ? x.ocorrencias : f === 'ncm' ? !x.ncmOk : x.status === f));
+      if ($('#tCtB')) $('#tCtB').innerHTML = l.map(x => `<tr><td class="mono"><b>${esc(x.codigo)}</b></td><td>${x.status === 'ativo' ? esc(x.situacao) : `<span class="badge ${x.status === 'multiplos' ? 'sev-alerta' : 'sev-bloqueante'}">${esc(x.situacao)}</span>`}${x.status === 'multiplos' ? `<div class="sm mut">${esc(x.ativos)}</div>` : ''}</td><td>${esc(x.produto)}</td><td>${U.fmtNcm(x.ncmCatalogo)}</td><td class="${x.ncmOk ? '' : 'cel-blq'}">${esc(x.ncmDocs.split(', ').filter(Boolean).map(U.fmtNcm).join(', '))}</td><td class="num">${x.semelhanca == null ? '—' : x.semelhanca + '%'}</td><td class="sm">${esc(x.faltamNoCatalogo)}</td><td class="sm">${esc(x.faltamNaFatura)}</td><td class="sm">${esc(x.ocorrencias)}</td></tr>`).join('') || '<tr><td colspan="9" class="empty">Nenhum item neste filtro.</td></tr>';
+    };
+    if ($('#fCt')) { $('#fCt').onchange = desenharCat; $('#bCtX').onclick = () => {
+      const ws = XLSX.utils.json_to_sheet(linhasCat.map(x => ({ 'Código interno': x.codigo, 'Situação no catálogo': x.situacao, 'Produto (código v versão)': x.produto, 'Produtos ativos': x.ativos, 'NCM catálogo': U.fmtNcm(x.ncmCatalogo), 'NCM documentos': x.ncmDocs.split(', ').filter(Boolean).map(U.fmtNcm).join(', '), 'NCM confere': x.ncmOk ? 'sim' : 'NÃO', 'Semelhança descrição invoice x catálogo (%)': x.semelhanca, 'Na invoice e não no catálogo': x.faltamNoCatalogo, 'No catálogo e não na invoice': x.faltamNaFatura, 'Ocorrências': x.ocorrencias })));
+      ws['!cols'] = [16, 24, 18, 18, 14, 22, 12, 14, 40, 40, 22].map(w => ({ wch: w }));
+      const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, 'Catálogo');
+      XLSX.writeFile(wb, `Confronto_catalogo_IP_${nomeSeguro(p.ref_cliente)}_analise${a.numero}.xlsx`);
+    }; }
+    desenharCat();
+    $$('.tabs2 button').forEach(b => b.onclick = () => { $$('.tabs2 button').forEach(x => x.classList.toggle('on', x === b)); ['oc', 'it', 'ct', 'dc'].forEach(t => $('#t' + t[0].toUpperCase() + t[1]).classList.toggle('hide', b.dataset.t !== t)); });
     $('#bPdf').onclick = () => editorParecer(a, p, ocs);
     $('#bTxt').onclick = () => copiar(R.montarParecer(r, ocs.filter(o => o.status !== 'substituida' && o.incluir_pdf).map(o => ({ documento: o.documento, texto: o.texto_pdf || o.sugestao })), Object.assign({}, a.parecer || {}, { documentosAnalisados: (rs.documentos || []) })).texto);
     if (nova && pend.length && !a.decisao) {

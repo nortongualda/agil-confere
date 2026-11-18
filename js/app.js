@@ -296,20 +296,33 @@
 
   /* ---------------- nova análise ---------------- */
   const SLOTS = {
-    pre_alerta: [['invoice', 'Invoice (+ packing list)', 'Planilha do exportador (.xlsx). Se o packing list estiver na mesma planilha, ele é lido junto.'], ['packing', 'Packing list', 'Opcional quando já vem na planilha da invoice.'], ['bl', 'Draft HBL', 'Planilha do draft (.xlsx).']],
-    pre_registro: [['txt', 'TXT do TOTVS', 'Arquivo .txt gerado no ERP da Eletra (layout SIGAEIC).'], ['invoice', 'Invoice final', 'Planilha da invoice (.xlsx).'], ['relatorio', 'Relatório de itens', 'Relatório de itens do Sigraweb (.xlsx).']]
+    pre_alerta: [['invoice', 'Invoice (+ packing list)', 'PDF, imagem ou planilha do exportador. Se o packing list (ou o BL) estiver no mesmo arquivo, é lido junto.'], ['packing', 'Packing list', 'Opcional quando já vem na planilha da invoice.'], ['bl', 'Draft HBL', 'PDF, imagem ou planilha do draft.']],
+    pre_registro: [['txt', 'TXT do TOTVS', 'Arquivo .txt gerado no ERP da Eletra (layout SIGAEIC).'], ['invoice', 'Invoice final', 'PDF, imagem ou planilha da invoice.'], ['relatorio', 'Relatório de itens', 'Relatório de itens do Sigraweb (.xlsx).']]
   };
-  async function lerArquivo(file) {
+  async function lerArquivo(file, progresso) {
     const buf = await file.arrayBuffer();
     const hash = await hashArquivo(buf);
     const nome = file.name;
-    if (/\.pdf$/i.test(nome)) return { file, buf, hash, nome, tipo: 'outro', aviso: 'PDF fica anexado ao processo, mas ainda não é lido automaticamente. Para conferir, envie a planilha (.xlsx).' };
+    if (/\.(pdf|jpe?g|png)$/i.test(nome)) {
+      const ehPdf = /\.pdf$/i.test(nome);
+      const L = ehPdf ? await window.ConfereLeitor.lerPDF(buf, { nome, progresso }) : await window.ConfereLeitor.lerImagem(file, { nome, progresso });
+      const leitura = { origem: L.ocr ? 'ocr' : 'pdf', paginas: L.paginas, confianca: L.confianca, duvidosas: L.palavrasDuvidosas, tempo: L.tempo, segmentos: L.segmentos };
+      const base = { file, buf, hash, nome, leitura, abasPdf: L.abas };
+      const rel = C.lerRelatorio(L.abas);
+      if (rel.itens.length) return Object.assign(base, { tipo: 'relatorio', relatorio: rel });
+      const abasBl = L.abas.filter(a => a.titulo === 'bl');
+      const bl = abasBl.length ? C.lerBL(abasBl) : null;
+      const com = C.lerDocumentosComerciais(L.abas.filter(a => a.titulo !== 'bl'));
+      if (com.invoice || com.packing) return Object.assign(base, { tipo: com.invoice && com.packing ? 'invoice_packing' : com.invoice ? 'invoice' : 'packing', invoice: com.invoice, packing: com.packing, blJunto: bl, abas: com.abas });
+      if (bl) return Object.assign(base, { tipo: 'bl', bl });
+      return Object.assign(base, { tipo: 'outro', aviso: `${nome}: anexado ao processo, mas não reconheci nele invoice, packing list, BL ou relatório de itens.` });
+    }
     if (/\.txt$/i.test(nome)) {
       const txt = C.lerTotvs(U.decodificar(buf), nome);
       return { file, buf, hash, nome, tipo: 'txt', txt };
     }
     if (/\.json$/i.test(nome)) return { file, buf, hash, nome, tipo: 'erro', erro: 'Para o catálogo, use a tela Catálogo de produtos.' };
-    if (!/\.(xlsx|xlsm|xls|csv)$/i.test(nome)) return { file, buf, hash, nome, tipo: 'erro', erro: 'Formato não suportado. Envie .xlsx, .txt ou .pdf.' };
+    if (!/\.(xlsx|xlsm|xls|csv)$/i.test(nome)) return { file, buf, hash, nome, tipo: 'erro', erro: 'Formato não suportado. Envie PDF, imagem (JPG/PNG), planilha (.xlsx) ou .txt.' };
     const abas = C.lerPastaTrabalho(XLSX, buf);
     const rel = C.lerRelatorio(abas);
     if (rel.itens.length) return { file, buf, hash, nome, tipo: 'relatorio', relatorio: rel };
@@ -341,8 +354,104 @@
       L.push(`<b>Relatório ${esc(r.cab.refAgil || '')}</b> · ref. ${esc(r.cab.refCliente || '?')} · ${r.itens.length} linhas · ${esc(r.cab.moeda || '')} (taxa ${U.fmtAuto(r.cab.taxaMoeda, 4)})`);
     }
     const av = [].concat((x.txt && x.txt.avisos) || [], (x.invoice && x.invoice.avisos) || [], (x.bl && x.bl.avisos) || [], (x.relatorio && x.relatorio.avisos) || []);
+    if (x.leitura && x.file) {
+      const lt = x.leitura, pend = leituraPendente(x);
+      L.push(`<span class="sm">${lt.origem === 'ocr' ? `PDF escaneado lido por reconhecimento de texto (confiança média ${lt.confianca}%)` : 'Lido do PDF'} · ${lt.paginas} pág.</span>`);
+      L.push(x.revisado ? `<span class="sm" style="color:var(--ok)">✓ Leitura conferida por ${esc(nomeUsuario(x.revisado.por))}${x.revisado.alteracoes.length ? ` (${x.revisado.alteracoes.length} correção(ões))` : ''}</span> <button class="bt3" data-rev="${slot}">ver</button>`
+        : `<button class="bt2" data-rev="${slot}" style="margin-top:4px">${pend ? '⚠ Conferir leitura (obrigatório)' : 'Conferir leitura'}</button>`);
+    }
     return L.join('<br>') + av.slice(0, 4).map(a => `<div class="warn">⚠ ${esc(a)}</div>`).join('');
   }
+  /* ---------------- conferência da leitura de PDF ---------------- */
+  const CAMPOS_CAB = {
+    invoice: [['numero', 'Nº invoice'], ['data', 'Data (AAAA-MM-DD)'], ['ipRef', 'Ref. IP'], ['poRef', 'PO'], ['incoterm', 'Incoterm'], ['moeda', 'Moeda'], ['pagamento', 'Pagamento'], ['paisOrigem', 'País de origem'], ['paisAquisicao', 'País de aquisição'], ['paisProcedencia', 'País de procedência'], ['portoOrigem', 'Porto de origem'], ['portoDestino', 'Porto de destino'], ['exportador.nome', 'Exportador'], ['exportador.endereco', 'Endereço do exportador'], ['importador.nome', 'Importador'], ['importador.cnpj', 'CNPJ do importador'], ['importador.endereco', 'Endereço do importador'], ['frete.valor', 'Frete', 'n'], ['seguro.valor', 'Seguro', 'n'], ['volumes.qtd', 'Volumes', 'n'], ['volumes.especie', 'Espécie'], ['marcas', 'Marcas']],
+    packing: [['numero', 'Nº invoice'], ['volumes.qtd', 'Volumes', 'n'], ['volumes.especie', 'Espécie'], ['cubagem', 'Cubagem (m³)', 'n'], ['marcas', 'Marcas'], ['madeira', 'Embalagem de madeira'], ['container', 'Container'], ['lacre', 'Lacre']],
+    bl: [['numero', 'Nº BL'], ['shipper.nome', 'Shipper'], ['consignee.nome', 'Consignee'], ['consignee.cnpj', 'CNPJ consignee'], ['notify.nome', 'Notify'], ['portoEmbarque', 'Porto de embarque'], ['portoDescarga', 'Porto de descarga'], ['destinoFinal', 'Destino final'], ['navio', 'Navio'], ['pesoBruto', 'Peso bruto', 'n'], ['cubagem', 'Cubagem', 'n'], ['volumes.qtd', 'Volumes', 'n'], ['volumes.especie', 'Espécie'], ['marcas', 'Marcas'], ['ipRef', 'Ref. IP'], ['incoterm', 'Incoterm'], ['freteModalidade', 'Frete (prepaid/collect)'], ['freteTexto', 'Frete (texto)'], ['madeira', 'Embalagem de madeira'], ['container', 'Container'], ['lacre', 'Lacre'], ['freeTime', 'Free time (dias)', 'n']]
+  };
+  const CAMPOS_TOT = [['totais.qtd', 'Qtd total'], ['totais.total', 'Valor total'], ['totais.pesoLiq', 'Peso líq. total'], ['totais.pesoBruto', 'Peso bruto total']];
+  const CAMPOS_ITEM = { invoice: [['seq', 'Nº', 'n'], ['ncm', 'NCM'], ['codigo', 'Código'], ['descricao', 'Descrição'], ['qtd', 'Qtd', 'n'], ['unidade', 'Un.'], ['preco', 'Preço', 'n'], ['total', 'Total', 'n'], ['pesoLiq', 'Peso líq.', 'n'], ['pesoBruto', 'Peso bruto', 'n'], ['po', 'PO']], packing: [['seq', 'Nº', 'n'], ['ncm', 'NCM'], ['codigo', 'Código'], ['descricao', 'Descrição'], ['qtd', 'Qtd', 'n'], ['pesoLiq', 'Peso líq.', 'n'], ['pesoBruto', 'Peso bruto', 'n']] };
+  const pegar = (o, c) => c.split('.').reduce((a, k) => a == null ? null : a[k], o);
+  function pôr(o, c, v) { const ks = c.split('.'); let a = o; ks.slice(0, -1).forEach(k => { if (a[k] == null || typeof a[k] !== 'object') a[k] = {}; a = a[k]; }); a[ks[ks.length - 1]] = v; }
+  // conferência automática: o que não fecha pode ser erro de leitura ou do próprio documento
+  function checagens(doc, tipo) {
+    const out = [];
+    if (!doc || !doc.itens) return out;
+    const soma = k => doc.itens.reduce((a, i) => a + (i[k] || 0), 0);
+    doc.itens.forEach((i, k) => {
+      if (tipo === 'invoice' && i.qtd != null && i.preco != null && i.total != null && !U.iguais(i.qtd * i.preco, i.total, 2)) out.push({ k, campos: ['qtd', 'preco', 'total'], msg: `Item ${i.seq != null ? i.seq : k + 1}: ${U.fmtAuto(i.qtd, 5)} × ${U.fmtAuto(i.preco)} = ${U.fmt(i.qtd * i.preco)}, mas o total lido é ${U.fmt(i.total)}` });
+      ['qtd', 'pesoLiq', 'pesoBruto'].concat(tipo === 'invoice' ? ['preco', 'total'] : []).forEach(c => { if (i[c] == null) out.push({ k, campos: [c], msg: `Item ${i.seq != null ? i.seq : k + 1}: ${c === 'qtd' ? 'quantidade' : c === 'preco' ? 'preço' : c === 'total' ? 'total' : c === 'pesoLiq' ? 'peso líquido' : 'peso bruto'} não lido` }); });
+      if (i.pesoLiq != null && i.pesoBruto != null && i.pesoLiq > i.pesoBruto) out.push({ k, campos: ['pesoLiq', 'pesoBruto'], msg: `Item ${i.seq != null ? i.seq : k + 1}: peso líquido maior que o bruto` });
+    });
+    const T = doc.totais || {};
+    [['qtd', 'quantidade', 5], ['total', 'valor', 2], ['pesoLiq', 'peso líquido', 2], ['pesoBruto', 'peso bruto', 2]].forEach(([c, n, d]) => {
+      if (tipo !== 'invoice' && c === 'total') return;
+      if (T[c] == null) out.push({ tot: c, msg: `Total de ${n} não lido` });
+      else if (!U.iguais(T[c], soma(c), d)) out.push({ tot: c, msg: `Soma dos itens (${n}): ${U.fmtAuto(soma(c), d)}, total lido ${U.fmtAuto(T[c], d)}` });
+    });
+    return out;
+  }
+  function docsDoSlot(x) { return [['invoice', x.invoice], ['packing', x.packing], ['bl', x.bl || x.blJunto]].filter(([, d]) => d); }
+  function leituraPendente(x) {
+    if (!x || !x.leitura || x.revisado || !docsDoSlot(x).length) return false;
+    if (x.leitura.origem === 'ocr') return true;
+    return docsDoSlot(x).some(([t, d]) => t !== 'bl' && checagens(d, t).length);
+  }
+  function telaConferencia(slot, x, aoConfirmar) {
+    const docs = docsDoSlot(x);
+    const confDe = (doc, i, campo) => {
+      const aba = (x.abasPdf || []).find(a => a.nome === doc.aba);
+      const ci = doc.cab && doc.cab.colIdx ? doc.cab.colIdx[campo] : null;
+      if (!aba || !aba.confs || ci == null || !i.linha) return null;
+      const r = aba.confs[i.linha - 1];
+      return r ? r[ci] : null;
+    };
+    const inp = (v, attrs, cls) => `<input class="in ${cls || ''}" ${attrs} value="${esc(v == null ? '' : v)}">`;
+    const html = docs.map(([t, d]) => {
+      const cab = t === 'bl' ? d.cab : d.cab;
+      const campos = CAMPOS_CAB[t].map(([c, n, tp]) => `<div><label>${esc(n)}</label>${inp(pegar(cab, c), `data-d="${t}" data-c="cab.${c}" data-t="${tp || ''}"`)}</div>`).join('');
+      const tots = t === 'bl' ? '' : CAMPOS_TOT.filter(([c]) => t === 'invoice' || c !== 'totais.total').map(([c, n]) => `<div><label>${esc(n)}</label>${inp(pegar(d, c), `data-d="${t}" data-c="${c}" data-t="n"`)}</div>`).join('');
+      const itens = t === 'bl' ? `<label class="f">Descrição da carga</label><textarea class="in" data-d="bl" data-c="cab.descricaoCompleta" style="min-height:120px">${esc(d.cab.descricaoCompleta || '')}</textarea>` :
+        `<div class="tbw"><table class="tb"><thead><tr>${CAMPOS_ITEM[t].map(([, n]) => `<th>${esc(n)}</th>`).join('')}</tr></thead><tbody>${d.itens.map((i, k) => `<tr>${CAMPOS_ITEM[t].map(([c, , tp]) => { const cf = confDe(d, i, c); return `<td>${inp(i[c], `data-d="${t}" data-k="${k}" data-c="${c}" data-t="${tp || ''}" title="${cf != null ? 'confiança da leitura: ' + cf + '%' : ''}"`, (c === 'descricao' ? 'dsc ' : '') + (cf != null && cf < 80 ? 'duv' : ''))}</td>`; }).join('')}</tr>`).join('')}</tbody></table></div>`;
+      return `<div class="card"><h2>${esc(R.DOCS[t] || t)}${d.aba ? ` <span class="sm mut">(${esc(d.aba)})</span>` : ''}</h2><div class="ck" data-ck="${t}"></div><div class="kvr">${campos}${tots}</div>${itens}</div>`;
+    }).join('');
+    const url = URL.createObjectURL(x.file);
+    const m = modal({
+      titulo: 'Conferir leitura · ' + x.nome, largo: true,
+      corpo: `<div class="rv"><p class="sm">${x.leitura.origem === 'ocr' ? 'Documento <b>escaneado</b>: o texto foi reconhecido da imagem e pode ter dígitos trocados. Campos em amarelo foram lidos com pouca confiança.' : 'Documento lido do texto do PDF.'} Confira com o original e corrija o que estiver diferente. As correções ficam registradas no histórico. <a href="${url}" target="_blank" rel="noopener">Abrir o PDF original</a></p>${html}</div>`,
+      botoes: [{ txt: 'Cancelar' }, { txt: 'Confirmar leitura', cls: 'bt', acao: f => {
+        const alt = [];
+        $$('[data-c]', f).forEach(el => {
+          const d = docs.find(([t]) => t === el.dataset.d)[1];
+          const alvo = el.dataset.k != null ? d.itens[+el.dataset.k] : d;
+          const c = el.dataset.c, antes = pegar(alvo, c);
+          let v = el.value.trim();
+          v = el.dataset.t === 'n' ? (v === '' ? null : U.num(v)) : (v || null);
+          if (c === 'ncm' && v) v = U.ncmLimpa(v);
+          const igual = (antes == null || antes === '') && v == null || String(antes) === String(v) || (el.dataset.t === 'n' && antes != null && v != null && Number(antes) === Number(v));
+          if (!igual) { alt.push({ documento: el.dataset.d, item: el.dataset.k != null ? (alvo.codigo || alvo.seq || +el.dataset.k + 1) : null, campo: c, antes: antes == null ? null : String(antes), depois: v == null ? null : String(v) }); pôr(alvo, c, v); }
+        });
+        docs.forEach(([t, d]) => { if (t === 'bl') { const D = d.cab.descricaoCompleta || ''; d.cab.descricao = (D.split(/\r?\n/).find(z => z.trim()) || '').trim(); } else if (d.cab.importador && d.cab.importador.cnpj) d.cab.importador.cnpj = String(d.cab.importador.cnpj).replace(/\D/g, ''); });
+        x.revisado = { por: EU.email, em: new Date().toISOString(), alteracoes: alt };
+        URL.revokeObjectURL(url);
+        toast(alt.length ? `Leitura conferida com ${alt.length} correção(ões).` : 'Leitura conferida.');
+        if (aoConfirmar) aoConfirmar();
+      } }]
+    });
+    const atualizar = () => {
+      docs.forEach(([t, d]) => {
+        if (t === 'bl') return;
+        const tmp = { itens: d.itens.map((i, k) => { const o = Object.assign({}, i); $$(`[data-d="${t}"][data-k="${k}"]`, m.el).forEach(el => { if (el.dataset.t === 'n') o[el.dataset.c] = el.value.trim() === '' ? null : U.num(el.value); }); return o; }), totais: {} };
+        $$(`[data-d="${t}"][data-c^="totais."]`, m.el).forEach(el => { tmp.totais[el.dataset.c.slice(7)] = el.value.trim() === '' ? null : U.num(el.value); });
+        const ck = checagens(tmp, t);
+        $$(`[data-d="${t}"]`, m.el).forEach(el => el.classList.remove('err'));
+        ck.forEach(c => { if (c.tot) { const el = $(`[data-d="${t}"][data-c="totais.${c.tot}"]`, m.el); if (el) el.classList.add('err'); } else c.campos.forEach(cp => { const el = $(`[data-d="${t}"][data-k="${c.k}"][data-c="${cp}"]`, m.el); if (el) el.classList.add('err'); }); });
+        $(`[data-ck="${t}"]`, m.el).innerHTML = ck.length ? `<b>${ck.length} ponto(s) para conferir</b> (erro de leitura ou divergência do próprio documento; se o documento estiver assim, deixe como está que vira ocorrência):<br>${ck.slice(0, 12).map(c => '• ' + esc(c.msg)).join('<br>')}${ck.length > 12 ? '<br>…' : ''}` : '<span class="okk">✓ Itens e totais fecham.</span>';
+      });
+    };
+    m.el.addEventListener('input', atualizar);
+    atualizar();
+  }
+
   async function vNova(procId) {
     const procs = await dados(sb.from('confere_processos').select('id,ref_cliente,ref_agil,invoice,status').eq('importador_id', IMP.id).order('atualizado_em', { ascending: false }).limit(500));
     await carregarCatalogo();
@@ -365,7 +474,7 @@
         if (x && x.erro) corpo = `<div class="file err">${esc(x.nome)}: ${esc(x.erro)}</div>`;
         else if (x) corpo = `<div class="file">${esc(x.nome)}<br>${resumoDoc(k, x)}${x.aviso ? `<div class="warn">${esc(x.aviso)}</div>` : ''}<div><button class="bt3" data-limpa="${k}">remover</button></div></div>`;
         else if (ant) corpo = `<div class="file"><label><input type="checkbox" data-ant="${k}" ${ant.usar ? 'checked' : ''}> Reaproveitar <b>${esc(ant.arquivo_nome)}</b></label><div class="sm mut">enviado em ${dataHora(ant.enviado_em)} por ${esc(nomeUsuario(ant.enviado_por))}</div></div>`;
-        return `<div class="drop" data-slot="${k}"><h3>${esc(t)}</h3><div class="hint">${esc(h)}</div>${corpo}<div><label class="bt2" style="cursor:pointer">Escolher arquivo<input type="file" hidden data-in="${k}" accept=".xlsx,.xls,.xlsm,.txt,.pdf,.csv"></label></div></div>`;
+        return `<div class="drop" data-slot="${k}"><h3>${esc(t)}</h3><div class="hint">${esc(h)}</div>${corpo}<div><label class="bt2" style="cursor:pointer">Escolher arquivo<input type="file" hidden data-in="${k}" accept=".pdf,.xlsx,.xls,.xlsm,.txt,.csv,.jpg,.jpeg,.png"></label></div></div>`;
       }).join('');
       $('#catInfo').innerHTML = CAT ? `Catálogo vigente: <b>${esc(CAT.meta.arquivo)}</b> (gerado em ${dataHora(CAT.meta.geradoEm)}, ${CAT.meta.total} produtos). <a href="#catalogo">Atualizar catálogo</a>` : `<span style="color:var(--err)">Nenhum catálogo carregado: a conferência por item no catálogo não será feita. <a href="#catalogo">Carregar catálogo</a></span>`;
     };
@@ -373,13 +482,13 @@
       for (const f of files) {
         const prog = $('#prog'); prog.textContent = 'Lendo ' + f.name + '…';
         let x;
-        try { x = await lerArquivo(f); } catch (e) { x = { nome: f.name, erro: 'Falha ao ler: ' + erroMsg(e) }; }
+        try { x = await lerArquivo(f, t => { prog.textContent = t; }); } catch (e) { x = { nome: f.name, erro: 'Falha ao ler: ' + erroMsg(e) }; }
         prog.textContent = '';
         if (x.erro) { toast(`${f.name}: ${x.erro}`, true); continue; }
         if (x.tipo === 'txt') { if (S.fase !== 'pre_registro') { S.fase = 'pre_registro'; marcarFase(); } S.slots.txt = x; }
         else if (x.tipo === 'relatorio') { if (S.fase !== 'pre_registro') { S.fase = 'pre_registro'; marcarFase(); } S.slots.relatorio = x; }
         else if (x.tipo === 'bl') S.slots.bl = x;
-        else if (x.tipo === 'invoice_packing' || x.tipo === 'invoice') { S.slots.invoice = x; if (x.packing && S.fase === 'pre_alerta') delete S.slots.packing; }
+        else if (x.tipo === 'invoice_packing' || x.tipo === 'invoice') { S.slots.invoice = x; if (x.packing && S.fase === 'pre_alerta') delete S.slots.packing; if (x.blJunto && S.fase === 'pre_alerta') S.slots.bl = { nome: x.nome + ' (BL no mesmo PDF)', tipo: 'bl', bl: x.blJunto, deArquivo: 'invoice' }; }
         else if (x.tipo === 'packing') S.slots.packing = x;
         else if (x.tipo === 'outro') { S.slots['outro_' + x.hash.slice(0, 6)] = x; toast(x.aviso); }
         if (!$('#nProc').value && !$('#nRc').value) {
@@ -410,7 +519,8 @@
     drops.addEventListener('dragleave', e => { if (!drops.contains(e.relatedTarget)) $$('.drop').forEach(x => x.classList.remove('on')); });
     drops.addEventListener('drop', e => { e.preventDefault(); $$('.drop').forEach(x => x.classList.remove('on')); atribuir([...e.dataTransfer.files]); });
     drops.addEventListener('change', e => { const i = e.target.closest('input[data-in]'); if (i && i.files.length) atribuir([...i.files]); const a = e.target.closest('input[data-ant]'); if (a) S.anteriores[a.dataset.ant].usar = a.checked; });
-    drops.addEventListener('click', e => { const l = e.target.closest('[data-limpa]'); if (l) { delete S.slots[l.dataset.limpa]; desenharSlots(); } });
+    drops.addEventListener('redesenhar', () => desenharSlots());
+    drops.addEventListener('click', e => { const l = e.target.closest('[data-limpa]'); if (l) { delete S.slots[l.dataset.limpa]; desenharSlots(); } const r = e.target.closest('[data-rev]'); if (r) { const x = S.slots[r.dataset.rev]; if (x) telaConferencia(r.dataset.rev, x, desenharSlots); } });
     $('#bRodar').onclick = () => rodar(S, procs);
     if (procId) { S.proc = procId; const an = await dados(sb.from('confere_analises').select('fase').eq('processo_id', procId).order('criado_em', { ascending: false }).limit(1)); if (an[0] && an[0].fase === 'pre_alerta') S.fase = 'pre_registro'; marcarFase(); }
     await carregarAnteriores();
@@ -424,6 +534,8 @@
       let proc = procs.find(p => p.id === S.proc);
       const refCliente = proc ? proc.ref_cliente : $('#nRc').value.trim();
       if (!refCliente) throw new Error('Informe a referência do cliente (IP) ou escolha um processo.');
+      const pend = Object.entries(S.slots).find(([, x]) => x && !x.erro && x.file && leituraPendente(x));
+      if (pend) { telaConferencia(pend[0], pend[1], () => { $('#drops') && $('#drops').dispatchEvent(new Event('redesenhar')); }); throw new Error(`Confira a leitura de "${pend[1].nome}" antes de rodar a análise.`); }
       // documentos: novos ou reaproveitados
       const docs = {}, usados = [];
       const pegarAnterior = async k => {
@@ -473,7 +585,7 @@
         const caminho = `processos/${proc.id}/${Date.now()}-${nomeSeguro(x.nome)}`;
         const up = await sb.storage.from('confere').upload(caminho, x.file, { upsert: false, contentType: x.file.type || 'application/octet-stream' });
         if (up.error) throw up.error;
-        const extraido = { invoice: x.invoice || null, packing: x.packing || null, bl: x.bl || null, txt: x.txt || null, relatorio: x.relatorio || null };
+        const extraido = { invoice: x.invoice || null, packing: x.packing || null, bl: x.bl || x.blJunto || null, txt: x.txt || null, relatorio: x.relatorio || null, leitura: x.leitura ? Object.assign({}, x.leitura, { revisado: x.revisado || null }) : null };
         const [d] = await dados(sb.from('confere_documentos').insert({ processo_id: proc.id, tipo: x.tipo === 'erro' ? 'outro' : x.tipo, arquivo_nome: x.nome, arquivo_hash: x.hash, tamanho: x.file.size, storage_path: caminho, extraido }).select('id,tipo,arquivo_nome,arquivo_hash'));
         usados.push({ id: d.id, tipo: d.tipo, arquivo_nome: d.arquivo_nome, hash: d.arquivo_hash });
       }

@@ -1,0 +1,278 @@
+/* Ágil Confere · leitura de PDF e imagem no navegador (sem custo, sem enviar o documento a terceiros).
+   PDF com texto: pdf.js lê as palavras e as posições. PDF escaneado ou foto: Tesseract (OCR) reconhece o texto.
+   Em ambos os casos a página é desenhada para achar as linhas de tabela, e a grade final sai do núcleo
+   (Confere.pdfgrade), no mesmo formato das planilhas. */
+(function () {
+  'use strict';
+  const C = window.Confere;
+  const AQUI = (document.currentScript && document.currentScript.src) || (location.href.replace(/[^/]*$/, '') + 'js/leitorpdf.js');
+  const VENDOR = new URL('vendor/', AQUI).href;
+  const MIN_CARACTERES_TEXTO = 40;
+
+  /* ---------------- bibliotecas (carregadas só quando precisa) ---------------- */
+  let pdfjsP = null, tessP = null, workerP = null;
+  function pdfjs() {
+    if (!pdfjsP) pdfjsP = import(VENDOR + 'pdfjs/pdf.min.js').then(m => { m.GlobalWorkerOptions.workerSrc = VENDOR + 'pdfjs/pdf.worker.min.js'; return m; });
+    return pdfjsP;
+  }
+  function tesseract() {
+    if (window.Tesseract) return Promise.resolve(window.Tesseract);
+    if (!tessP) tessP = new Promise((ok, erro) => { const s = document.createElement('script'); s.src = VENDOR + 'tesseract/tesseract.min.js'; s.onload = () => ok(window.Tesseract); s.onerror = () => erro(new Error('Não foi possível carregar o leitor de imagem (OCR).')); document.head.appendChild(s); });
+    return tessP;
+  }
+  async function workerOcr(progresso) {
+    if (!workerP) {
+      workerP = (async () => {
+        const T = await tesseract();
+        const w = await T.createWorker(['eng', 'por'], 1, {
+          workerPath: VENDOR + 'tesseract/worker.min.js', corePath: VENDOR + 'tesseract/core', langPath: VENDOR + 'tesseract/lang', gzip: true,
+          logger: m => { if (workerP && workerP.aoProgresso && m && m.status === 'recognizing text') workerP.aoProgresso(m.progress); }
+        });
+        await w.setParameters({ tessedit_pageseg_mode: '3', preserve_interword_spaces: '1', user_defined_dpi: '300' });
+        return w;
+      })();
+      workerP.catch(() => { workerP = null; });
+    }
+    const w = await workerP;
+    return w;
+  }
+
+  /* ---------------- desenho da página ---------------- */
+  async function desenhar(page, escala) {
+    const vp = page.getViewport({ scale: escala });
+    const cv = document.createElement('canvas');
+    cv.width = Math.ceil(vp.width); cv.height = Math.ceil(vp.height);
+    const ctx = cv.getContext('2d', { willReadFrequently: true });
+    ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, cv.width, cv.height);
+    await page.render({ canvas: cv, canvasContext: ctx, viewport: vp, background: '#ffffff' }).promise;
+    return cv;
+  }
+  function mapaEscuro(cv, limiar) {
+    const ctx = cv.getContext('2d', { willReadFrequently: true });
+    const { width: W, height: H } = cv;
+    const px = ctx.getImageData(0, 0, W, H).data;
+    const m = new Uint8Array(W * H);
+    for (let i = 0, j = 0; i < m.length; i++, j += 4) m[i] = (px[j] * 299 + px[j + 1] * 587 + px[j + 2] * 114) / 1000 < limiar ? 1 : 0;
+    return { m, W, H };
+  }
+  // linhas de tabela: trechos escuros longos (horizontais e verticais), em pontos
+  function detectarReguas(cv, escala) {
+    const { m, W, H } = mapaEscuro(cv, 170);
+    const minH = Math.round(24 * escala), minV = Math.round(14 * escala), folga = Math.max(1, Math.round(escala * 0.6));
+    const hs = [];
+    for (let y = 0; y < H; y++) {
+      const base = y * W;
+      let x = 0;
+      while (x < W) {
+        if (!m[base + x]) { x++; continue; }
+        let x1 = x, buraco = 0, k = x;
+        while (k < W && buraco <= folga) { if (m[base + k]) { x1 = k; buraco = 0; } else buraco++; k++; }
+        if (x1 - x + 1 >= minH) hs.push({ y, x0: x, x1 });
+        x = k;
+      }
+    }
+    const vs = [];
+    for (let x = 0; x < W; x++) {
+      let y = 0;
+      while (y < H) {
+        if (!m[y * W + x]) { y++; continue; }
+        let y1 = y, buraco = 0, k = y;
+        while (k < H && buraco <= folga) { if (m[k * W + x]) { y1 = k; buraco = 0; } else buraco++; k++; }
+        if (y1 - y + 1 >= minV) vs.push({ x, y0: y, y1 });
+        y = k;
+      }
+    }
+    // junta trechos de linhas vizinhas (espessura) e descarta faixas grossas (fundo de célula)
+    const juntar = (lista, pos, a, b) => {
+      lista.sort((p, q) => p[pos] - q[pos] || p[a] - q[a]);
+      const out = [];
+      for (const s of lista) {
+        const g = out.find(o => s[pos] - o.fim <= 1 && Math.min(o[b], s[b]) - Math.max(o[a], s[a]) > 0.5 * Math.min(o[b] - o[a], s[b] - s[a]));
+        if (g) { g.fim = s[pos]; g[a] = Math.min(g[a], s[a]); g[b] = Math.max(g[b], s[b]); g.n++; }
+        else out.push(Object.assign({}, s, { ini: s[pos], fim: s[pos], n: 1 }));
+      }
+      return out;
+    };
+    const esp = 3.5 * escala;
+    const H2 = [], V2 = [];
+    juntar(hs, 'y', 'x0', 'x1').forEach(g => {
+      const e = g.fim - g.ini + 1;
+      if (e <= esp) H2.push({ y: (g.ini + g.fim) / 2 / escala, x0: g.x0 / escala, x1: g.x1 / escala });
+      else { H2.push({ y: g.ini / escala, x0: g.x0 / escala, x1: g.x1 / escala }); H2.push({ y: g.fim / escala, x0: g.x0 / escala, x1: g.x1 / escala }); }
+    });
+    juntar(vs, 'x', 'y0', 'y1').forEach(g => {
+      const e = g.fim - g.ini + 1;
+      if (e <= esp) V2.push({ x: (g.ini + g.fim) / 2 / escala, y0: g.y0 / escala, y1: g.y1 / escala });
+    });
+    return { h: H2, v: V2, raw: { hs, vs } };
+  }
+  // inclinação do scan (graus), pelo perfil de projeção horizontal
+  function estimarInclinacao(cv) {
+    const red = 4;
+    const W = Math.floor(cv.width / red), H = Math.floor(cv.height / red);
+    const t = document.createElement('canvas'); t.width = W; t.height = H;
+    const c2 = t.getContext('2d', { willReadFrequently: true }); c2.drawImage(cv, 0, 0, W, H);
+    const { m } = mapaEscuro(t, 140);
+    const pts = [];
+    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) if (m[y * W + x]) pts.push(x, y);
+    if (pts.length < 200) return 0;
+    let melhor = 0, nota = -1;
+    const avaliar = a => {
+      const s = Math.sin(a * Math.PI / 180), c = Math.cos(a * Math.PI / 180);
+      const hist = new Float64Array(H * 2 + 10);
+      for (let i = 0; i < pts.length; i += 2) { const y = Math.round(pts[i + 1] * c - pts[i] * s) + H; if (y >= 0 && y < hist.length) hist[y]++; }
+      let v = 0; for (let i = 1; i < hist.length; i++) { const d = hist[i] - hist[i - 1]; v += d * d; }
+      return v;
+    };
+    for (let a = -3; a <= 3.0001; a += 0.25) { const v = avaliar(a); if (v > nota) { nota = v; melhor = a; } }
+    for (let a = melhor - 0.25; a <= melhor + 0.25; a += 0.05) { const v = avaliar(a); if (v > nota) { nota = v; melhor = a; } }
+    return melhor;
+  }
+  function girar(cv, graus) {
+    const o = document.createElement('canvas'); o.width = cv.width; o.height = cv.height;
+    const ctx = o.getContext('2d', { willReadFrequently: true });
+    ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, o.width, o.height);
+    ctx.translate(o.width / 2, o.height / 2); ctx.rotate(-graus * Math.PI / 180); ctx.drawImage(cv, -cv.width / 2, -cv.height / 2);
+    return o;
+  }
+  function apagarReguas(cv, reguas, escala) {
+    const o = document.createElement('canvas'); o.width = cv.width; o.height = cv.height;
+    const ctx = o.getContext('2d'); ctx.drawImage(cv, 0, 0); ctx.fillStyle = '#fff';
+    const e = Math.max(2, Math.round(1.2 * escala));
+    reguas.h.forEach(r => ctx.fillRect(r.x0 * escala - 1, r.y * escala - e, (r.x1 - r.x0) * escala + 2, 2 * e));
+    reguas.v.forEach(r => ctx.fillRect(r.x * escala - e, r.y0 * escala - 1, 2 * e, (r.y1 - r.y0) * escala + 2));
+    return o;
+  }
+
+  /* ---------------- texto do PDF ---------------- */
+  let ctxMedida = null;
+  const cacheMedida = new Map();
+  function medir(t) {
+    if (!t) return 0;
+    if (cacheMedida.has(t)) return cacheMedida.get(t);
+    if (!ctxMedida) { ctxMedida = document.createElement('canvas').getContext('2d'); ctxMedida.font = '100px Helvetica, Arial, sans-serif'; }
+    const v = ctxMedida.measureText(t).width;
+    if (cacheMedida.size < 20000) cacheMedida.set(t, v);
+    return v;
+  }
+  function palavrasDoTexto(tc, vp, lib) {
+    const out = [];
+    for (const it of tc.items) {
+      if (!it.str || !it.str.trim()) continue;
+      const m = lib.Util.transform(vp.transform, it.transform);
+      if (Math.abs(m[1]) > Math.abs(m[0]) * 0.25 || m[0] <= 0) continue; // só texto horizontal
+      const fh = Math.hypot(m[2], m[3]) || 1;
+      const st = (tc.styles && tc.styles[it.fontName]) || {};
+      let asc = st.ascent, desc = st.descent;
+      if (!(asc > 0.4 && asc < 1.3)) asc = 0.8;
+      if (!(desc < 0 && desc > -0.6)) desc = -0.2;
+      const x0 = m[4], yb = m[5], w = it.width * vp.scale;
+      if (!(w > 0)) continue;
+      const y0 = yb - fh * asc, y1 = yb - fh * desc;
+      // divide em palavras com posição medida (o pdf.js às vezes junta células vizinhas num só trecho)
+      const s = it.str, total = medir(s);
+      if (!/\s/.test(s.trim()) || !total) { out.push({ t: s, x0, x1: x0 + w, y0, y1 }); continue; }
+      const k = w / total;
+      const re = /\S+/g; let mm;
+      while ((mm = re.exec(s))) { const a = medir(s.slice(0, mm.index)) * k; out.push({ t: mm[0], x0: x0 + a, x1: x0 + a + medir(mm[0]) * k, y0, y1 }); }
+    }
+    return out;
+  }
+
+  /* ---------------- OCR ---------------- */
+  async function ocrCanvas(cv, escala, aoProgresso) {
+    const w = await workerOcr();
+    if (workerP) workerP.aoProgresso = aoProgresso;
+    const r = await w.recognize(cv, {}, { blocks: true, text: false });
+    const toks = [];
+    const blocos = (r.data && r.data.blocks) || [];
+    blocos.forEach(b => (b.paragraphs || []).forEach(p => (p.lines || []).forEach(l => (l.words || []).forEach(wd => {
+      const t = String(wd.text || '').trim();
+      if (!t) return;
+      const bb = wd.bbox;
+      if (!bb || bb.x1 <= bb.x0) return;
+      // altura da linha (não da palavra) deixa as palavras da mesma linha alinhadas
+      const lb = l.bbox || bb;
+      toks.push({ t, x0: bb.x0 / escala, x1: bb.x1 / escala, y0: Math.max(bb.y0, lb.y0) / escala, y1: Math.min(Math.max(bb.y1, lb.y0 + 1), lb.y1) / escala, conf: wd.confidence });
+    }))));
+    return toks;
+  }
+
+  /* ---------------- leitura completa ---------------- */
+  async function lerPDF(buf, opcoes) {
+    const op = Object.assign({ nome: 'PDF', ocr: 'auto', progresso: () => {} }, opcoes || {});
+    const t0 = performance.now();
+    const lib = await pdfjs();
+    let doc, tarefa;
+    try {
+      tarefa = lib.getDocument({ data: new Uint8Array(buf.slice(0)), cMapUrl: VENDOR + 'pdfjs/cmaps/', cMapPacked: true, standardFontDataUrl: VENDOR + 'pdfjs/standard_fonts/', wasmUrl: VENDOR + 'pdfjs/wasm/', iccUrl: VENDOR + 'pdfjs/iccs/', isEvalSupported: false, enableXfa: false, useSystemFonts: false });
+      doc = await tarefa.promise;
+    } catch (e) {
+      if (e && e.name === 'PasswordException') throw new Error('O PDF está protegido por senha. Peça ao cliente uma versão sem senha.');
+      throw new Error('Não consegui abrir o PDF (' + ((e && e.message) || e) + ').');
+    }
+    const paginas = [], avisos = [];
+    let usouOcr = false, somaConf = 0, nConf = 0, baixas = 0;
+    const total = doc.numPages;
+    if (total > 40) avisos.push(`PDF com ${total} páginas: li as 40 primeiras.`);
+    for (let n = 1; n <= Math.min(total, 40); n++) {
+      op.progresso(`Lendo página ${n} de ${total}…`);
+      const page = await doc.getPage(n);
+      const vp = page.getViewport({ scale: 1 });
+      const tc = await page.getTextContent();
+      let tokens = palavrasDoTexto(tc, vp, lib);
+      const caracteres = tokens.reduce((s, t) => s + t.t.replace(/\s/g, '').length, 0);
+      const precisaOcr = op.ocr === 'sempre' || (op.ocr === 'auto' && caracteres < MIN_CARACTERES_TEXTO);
+      let reguas, inclinacao = 0;
+      if (!precisaOcr) {
+        const cv = await desenhar(page, 2);
+        reguas = detectarReguas(cv, 2);
+        cv.width = cv.height = 0;
+      } else {
+        usouOcr = true;
+        const esc = 3.5;
+        let cv = await desenhar(page, esc);
+        inclinacao = estimarInclinacao(cv);
+        if (Math.abs(inclinacao) >= 0.1) cv = girar(cv, inclinacao);
+        reguas = detectarReguas(cv, esc);
+        const limpo = apagarReguas(cv, reguas, esc);
+        op.progresso(`Reconhecendo o texto da página ${n} de ${total} (documento escaneado)…`);
+        tokens = await ocrCanvas(limpo, esc, p => op.progresso(`Reconhecendo o texto da página ${n} de ${total}: ${Math.round((p || 0) * 100)}%`));
+        tokens.forEach(t => { if (t.conf != null) { somaConf += t.conf; nConf++; if (t.conf < 80) baixas++; } });
+        cv.width = cv.height = 0; limpo.width = limpo.height = 0;
+      }
+      paginas.push({ numero: n, largura: vp.width, altura: vp.height, tokens, h: reguas.h, v: reguas.v, ocr: precisaOcr, inclinacao });
+      page.cleanup();
+    }
+    try { await tarefa.destroy(); } catch (e) { /* ok */ }
+    const r = C.pdfgrade.montar(paginas, { nome: op.nome });
+    return {
+      abas: r.abas, segmentos: r.segmentos, paginas: paginas.length, ocr: usouOcr,
+      confianca: nConf ? Math.round(somaConf / nConf) : null, palavrasDuvidosas: baixas,
+      tempo: Math.round(performance.now() - t0), avisos, bruto: op.bruto ? paginas : undefined
+    };
+  }
+  async function lerImagem(arquivo, opcoes) {
+    const op = Object.assign({ nome: 'Imagem', progresso: () => {} }, opcoes || {});
+    const t0 = performance.now();
+    const bmp = await createImageBitmap(arquivo instanceof Blob ? arquivo : new Blob([arquivo]));
+    // escala para ~300 dpi em A4 (lado maior perto de 3500 px)
+    const fator = Math.min(3, Math.max(1, 3500 / Math.max(bmp.width, bmp.height)));
+    let cv = document.createElement('canvas'); cv.width = Math.round(bmp.width * fator); cv.height = Math.round(bmp.height * fator);
+    const ctx = cv.getContext('2d', { willReadFrequently: true }); ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, cv.width, cv.height); ctx.drawImage(bmp, 0, 0, cv.width, cv.height);
+    // tamanho "em pontos" como se fosse uma página A4
+    const pts = Math.max(cv.width, cv.height) / 842;
+    const inc = estimarInclinacao(cv);
+    if (Math.abs(inc) >= 0.1) cv = girar(cv, inc);
+    const reguas = detectarReguas(cv, pts);
+    const limpo = apagarReguas(cv, reguas, pts);
+    op.progresso('Reconhecendo o texto da imagem…');
+    const tokens = await ocrCanvas(limpo, pts, p => op.progresso(`Reconhecendo o texto da imagem: ${Math.round((p || 0) * 100)}%`));
+    let somaConf = 0, nConf = 0, baixas = 0;
+    tokens.forEach(t => { if (t.conf != null) { somaConf += t.conf; nConf++; if (t.conf < 80) baixas++; } });
+    const r = C.pdfgrade.montar([{ numero: 1, largura: cv.width / pts, altura: cv.height / pts, tokens, h: reguas.h, v: reguas.v, ocr: true, inclinacao: inc }], { nome: op.nome });
+    return { abas: r.abas, segmentos: r.segmentos, paginas: 1, ocr: true, confianca: nConf ? Math.round(somaConf / nConf) : null, palavrasDuvidosas: baixas, tempo: Math.round(performance.now() - t0), avisos: [] };
+  }
+
+  window.ConfereLeitor = { lerPDF, lerImagem, _interno: { detectarReguas, estimarInclinacao, palavrasDoTexto, desenhar, pdfjs } };
+})();

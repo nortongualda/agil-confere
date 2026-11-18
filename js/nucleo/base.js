@@ -264,7 +264,18 @@
         if (!t || t.length > 70 || t.includes('\n')) continue;
         const dir = [];
         for (let k = c + 1; k < row.length; k++) if (!vazio(row[k])) dir.push(row[k]);
-        if (/[:：]$/.test(t)) out.push({ r, c, rotulo: t.replace(/[:：]$/, '').trim(), chave: norm(t.replace(/[:：]$/, '')), valor: dir.length ? dir[0] : null, valores: dir });
+        if (/[:：]$/.test(t)) {
+          let vals = dir, abaixo = false;
+          if (!vals.length) {
+            for (let k = r + 1; k < Math.min(lim, r + 3); k++) {
+              const b = cel((linhas[k] || [])[c]).trim();
+              if (!b) continue;
+              if (!/[:：]$/.test(b) && b.length <= 120 && !b.includes('\n')) { vals = [b]; abaixo = true; }
+              break;
+            }
+          }
+          out.push({ r, c, rotulo: t.replace(/[:：]$/, '').trim(), chave: norm(t.replace(/[:：]$/, '')), valor: vals.length ? vals[0] : null, valores: vals, abaixo });
+        }
         else {
           const m = /^([A-Za-zÀ-ú][A-Za-zÀ-ú .'\/()\-º°]{1,40})[:：]\s*(\S.*)$/.exec(t);
           if (m) out.push({ r, c, rotulo: m[1].trim(), chave: norm(m[1]), valor: m[2].trim(), valores: [m[2].trim()], inline: true });
@@ -286,8 +297,13 @@
         const t = cel(row[c]);
         if (!t.trim()) continue;
         const ls = t.split(/\r?\n/);
-        if (!re.test(norm(ls[0].replace(/[:：]\s*$/, '')))) continue;
-        const resto = ls.slice(1).join('\n').trim();
+        const l0 = norm(ls[0].replace(/[:：]\s*$/, ''));
+        const inl = /^([^:：]{2,40})[:：]\s*(\S.*)$/.exec(ls[0]);
+        const rotOk = s0 => re.test(s0) || re.test(s0.replace(/\s*(\(.*\)|[\/&].*)$/, '').trim());
+        let resto;
+        if (rotOk(l0)) resto = ls.slice(1).join('\n').trim();
+        else if (inl && rotOk(norm(inl[1]))) resto = [inl[2]].concat(ls.slice(1)).join('\n').trim();
+        else continue;
         if (resto) return { texto: resto, r, c };
         for (let k = r + 1; k < Math.min(linhas.length, r + 4); k++) {
           const v = cel((linhas[k] || [])[c]).trim();
@@ -348,7 +364,9 @@
     }
     return null;
   }
-  function tituloAba(linhas) {
+  function tituloAba(linhas, aba) {
+    if (aba && aba.titulo) return aba.titulo;
+    if (linhas && linhas.titulo) return linhas.titulo;
     for (let r = 0; r < Math.min(linhas.length, 6); r++) for (const v of (linhas[r] || [])) {
       const t = norm(v);
       if (/^(COMMERCIAL\s+)?INVOICE$|^FATURA(\s+COMERCIAL)?$|^PROFORMA\s+INVOICE$/.test(t)) return 'invoice';
@@ -387,11 +405,14 @@
       const row = linhas[r] || [];
       for (let c = 0; c < row.length; c++) {
         const t = cel(row[c]).trim();
-        if (t && re.test(norm(t))) {
+        const m = t ? re.exec(norm(t)) : null;
+        if (m) {
           const dir = [];
           for (let k = c + 1; k < row.length; k++) if (!vazio(row[k])) dir.push(row[k]);
           const inl = /[:：]\s*(\S.*)$/.exec(t);
-          return { r, c, texto: t, valores: inl && !dir.length ? [inl[1]] : dir };
+          // PDF: "TOTAL PACKED IN 45 PACKAGES" chega numa célula só
+          const resto = norm(t).slice(m.index + m[0].length).replace(/^[\s:：.]+/, '').trim();
+          return { r, c, texto: t, valores: dir.length ? dir : inl ? [inl[1]] : resto ? resto.split(/\s+/) : [] };
         }
       }
     }
@@ -403,7 +424,7 @@
     const linhas = aba.linhas;
     const cab = acharCabecalho(linhas);
     if (!cab) return null;
-    const titulo = tituloAba(linhas);
+    const titulo = tituloAba(linhas, aba);
     const tipo = tipoForcado || titulo || (cab.cols.preco != null || cab.cols.total != null ? 'invoice' : 'packing');
     const ps = pares(linhas, cab.r);
     const psRod = pares(linhas.slice(cab.r + 1));
@@ -427,7 +448,7 @@
         paisAquisicao: cel(pv(/^COUNTRY\s*OF\s*ACQUISITION$|^PAIS\s*DE\s*AQUISICAO$/)).trim() || null,
         paisProcedencia: cel(pv(/^COUNTRY\s*OF\s*(PRECEDENCE|PROVENANCE|PROCEDENCE)$|^PAIS\s*DE\s*PROCEDENCIA$/)).trim() || null,
         exportador: exp, importador: imp,
-        moeda: moedaDosRotulos(cab.rot), colunas: cab.rot, linhaCabecalho: cab.r + 1
+        moeda: moedaDosRotulos(cab.rot), colunas: cab.rot, colIdx: cab.cols, linhaCabecalho: cab.r + 1
       },
       itens: tab.itens, totais: tab.totais, avisos: []
     };
@@ -476,8 +497,9 @@
   function lerDocumentosComerciais(abas) {
     const out = { invoice: null, packing: null, avisos: [], abas: [] };
     for (const aba of abas) {
-      const t = tituloAba(aba.linhas);
-      const d = lerFaturaOuRomaneio(aba, t === 'bl' ? null : t);
+      const t = tituloAba(aba.linhas, aba);
+      if (t === 'bl') { out.abas.push({ nome: aba.nome, tipo: 'bl', itens: 0 }); continue; }
+      const d = lerFaturaOuRomaneio(aba, t);
       out.abas.push({ nome: aba.nome, tipo: d ? d.tipo : (t || 'ignorada'), itens: d ? d.itens.length : 0 });
       if (!d || !d.itens.length) continue;
       if (d.tipo === 'invoice' && !out.invoice) out.invoice = d;
@@ -487,6 +509,7 @@
     return out;
   }
   C.lerDocumentosComerciais = lerDocumentosComerciais;
+  C.colunas = { COLS, classifica, acharCabecalho, tituloAba };
 
   /* ============================== BL / HBL ============================== */
   const BL_ROT = [
@@ -506,7 +529,7 @@
   ];
   const ehRotuloBL = t => BL_ROT.some(([, re]) => re.test(norm(String(t).split(/\r?\n/)[0]))) || /^(MARKS|NO\.?\s*OF\s*PKGS|DESCRIPTION\s+OF|GROSS\s+WEIGHT|MEASUREMENT|CARRIER|NO\.?\s*OF\s*BILLS)/.test(norm(t));
   function lerBL(abas) {
-    const aba = abas.find(a => tituloAba(a.linhas) === 'bl') || abas[0];
+    const aba = abas.find(a => tituloAba(a.linhas, a) === 'bl') || abas[0];
     const L = aba.linhas;
     const cab = {};
     for (let r = 0; r < L.length; r++) for (let c = 0; c < (L[r] || []).length; c++) {
@@ -516,7 +539,8 @@
       const prim = norm(ls[0].replace(/[:：]\s*$/, ''));
       for (const [k, re] of BL_ROT) {
         if (cab[k] !== undefined || !re.test(prim)) continue;
-        let v = ls.slice(1).join('\n').trim();
+        const inl = /^[^:：]{2,40}[:：]\s*(\S.*)$/.exec(ls[0]);
+        let v = (inl ? [inl[1]] : []).concat(ls.slice(1)).join('\n').trim();
         if (!v) {
           for (let k2 = r + 1; k2 < Math.min(L.length, r + 3); k2++) { const b = cel((L[k2] || [])[c]).trim(); if (b && !ehRotuloBL(b)) { v = b; break; } if (b) break; }
         }

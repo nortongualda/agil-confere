@@ -89,7 +89,8 @@
     for (const t of l.toks) {
       if (cur) {
         const gap = t.x0 - cur.x1;
-        if (gap <= Math.max(1.2, 0.6 * l.h) && !temReguaV(V, cur.x1 - 0.6, t.x0 + 0.6, l.c0, l.c1)) {
+        const cw = Math.max((t.x1 - t.x0) / Math.max(1, t.t.length), (cur.toks[cur.toks.length - 1].x1 - cur.toks[cur.toks.length - 1].x0) / Math.max(1, cur.toks[cur.toks.length - 1].t.length));
+        if (gap <= Math.max(1.2, 0.6 * l.h, 1.4 * cw) && !temReguaV(V, cur.x1 - 0.6, t.x0 + 0.6, l.c0, l.c1)) {
           cur.t = junta(cur.t, t.t, gap, l.h); cur.x1 = Math.max(cur.x1, t.x1); cur.toks.push(t); cur.conf = minConf(cur.conf, t.conf);
           continue;
         }
@@ -340,7 +341,7 @@
           const lk = L[k];
           if (lk.y0 - ult.y1 > 1.25 * passo) break;
           if (temReguaH(H, ult.y1 - 0.5, lk.y0 + 0.5, c.x0, c.x0 + 80)) break;
-          const d = chunks[k].find(x => !usado.has(x) && !x.consumido && (ancoras.some(a => Math.abs(x.x0 - a) <= 3.5) || (!corpo.length && x.x0 > c.x0 && x.x0 - c.x0 <= 30)));
+          const d = chunks[k].find(x => !usado.has(x) && !x.consumido && (ancoras.some(a => Math.abs(x.x0 - a) <= 3.5) || (!corpo.length && ((x.x0 > c.x0 && x.x0 - c.x0 <= 30) || (x.x0 < c.x0 && x.x1 > c.x0 + 2 && c.x0 - x.x0 <= 80)))));
           if (d && !corpo.length && !ancoras.some(a => Math.abs(d.x0 - a) <= 3.5)) ancoras.push(d.x0);
           if (!d) break;
           const nd = norm(d.t);
@@ -352,7 +353,7 @@
     });
   }
 
-  const RE_CAIXA = /^(PORT\s+OF\s+(LOADING|DISCHARGE|TRANSHIPMENT)|PLACE\s+OF\s+(RECEIPT|DELIVERY)|FINAL\s+DESTINATION|(OCEAN\s+)?VESSEL|B\/L\s+(NO|NUMBER)|BILL\s+OF\s+LADING\s+NO|DOCUMENT\s+NUMBER|COUNTRY\s+OF\s+ORIGIN)\b/;
+  const RE_CAIXA = /^(PORT\s+OF\s+(LOADING|DISCHARGE|TRANSHIPMENT)|PLACE\s+OF\s+(RECEIPT|DELIVERY)|FINAL\s+DESTINATION|(OCEAN\s+)?VESSEL|EXPORT\s+CARRIER|DOCUMENT\s+NO|B\/L\s+(NO|NUMBER)|BILL\s+OF\s+LADING\s+NO|DOCUMENT\s+NUMBER|COUNTRY\s+OF\s+ORIGIN)\b/;
   function juntarCaixas(L, chunks) {
     L.forEach((l, i) => chunks[i].forEach(c => {
       if (c.consumido || c.bloco) return;
@@ -361,7 +362,7 @@
       let d = null;
       for (let k = i + 1; k <= i + 2 && k < L.length && !d; k++) {
         if (L[k].y0 - l.y1 > 2.8 * Math.max(l.h, L[k].h)) break;
-        d = chunks[k].find(x => !x.consumido && x.x0 >= c.x0 - 4 && x.x0 <= c.x0 + 40 && /[A-Za-z0-9]{3}/.test(x.t) && !RE_CAIXA.test(norm(x.t).replace(/^\d{1,2}[A-Z]?\s*[.,)]\s*/, '')));
+        d = chunks[k].find(x => !x.consumido && x.x0 >= c.x0 - 4 && x.x0 <= c.x0 + 40 && /[A-Za-z0-9]{3}/.test(x.t) && !/[:：]\s*$/.test(x.t) && !RE_CAMPO.test(norm(x.t)) && !RE_CAIXA.test(norm(x.t).replace(/^\d{1,2}[A-Z]?\s*[.,)]\s*/, '')));
       }
       if (!d) return;
       c.t = c.t.replace(/[:：]\s*$/, '') + '\n' + d.t; c.bloco = true; d.consumido = true;
@@ -409,12 +410,19 @@
         for (const c of pedacos(l, pg.v)) { const n = norm(c.t); const t = tituloDe(c.t) || (/\bBILL\s+OF\s+LADING\b(?!\s*(NO|NUMBER))/.test(n) ? 'bl' : /\bPACKING\s+LIST\b/.test(n) && n.length < 40 ? 'packing' : /\b(COMMERCIAL\s+)?INVOICE$/.test(n) && n.length < 40 ? 'invoice' : null); if (t) { titulo = t; break; } }
         if (titulo) break;
       }
-      return { pg, ip, toks, L, titulo };
+      // página sem título: o tipo da tabela diz se é invoice (tem preço) ou packing list (só pesos)
+      let tipoTabela = null;
+      if (!titulo) {
+        const cab = acharCabecalhoTabela(L, pg.v, pg.h);
+        if (cab && cab.tipo === 'itens') { const ks = new Set(cab.cols.map(c => c.chave)); tipoTabela = ks.has('preco') || ks.has('total') ? 'invoice' : (ks.has('pesoLiq') || ks.has('pesoBruto')) ? 'packing' : null; }
+      }
+      return { pg, ip, toks, L, titulo, tipoTabela };
     });
     const segs = [];
     pags.forEach(p => {
       const ult = segs[segs.length - 1];
-      if (!ult || (p.titulo && ult.titulo && p.titulo !== ult.titulo)) segs.push({ titulo: p.titulo, pags: [p] });
+      if (ult && !p.titulo && p.tipoTabela && ult.titulo && ult.titulo !== 'bl' && p.tipoTabela !== ult.titulo) segs.push({ titulo: p.tipoTabela, pags: [p] });
+      else if (!ult || (p.titulo && ult.titulo && p.titulo !== ult.titulo)) segs.push({ titulo: p.titulo, pags: [p] });
       else { ult.pags.push(p); if (!ult.titulo) ult.titulo = p.titulo; }
     });
     const abas = segs.map(sg => montarSegmento(sg, op));
@@ -444,7 +452,8 @@
         tab = { tipo: novo.tipo, cols: novo.cols, y1: novo.y1, lim: null };
         inicio = novo.i + novo.n;
         for (let k = novo.i; k < inicio; k++) usadas.add(iOrig(Lc[k]));
-        saida.push({ y: offset + novo.y0, cel: novo.cols.map(c => ({ x: c.x0, t: c.texto, conf: c.conf })) });
+        tab.linhaCab = { y: offset + novo.y0, cel: novo.cols.map(c => ({ x: c.x0, t: c.texto, conf: c.conf, col: c })) };
+        saida.push(tab.linhaCab);
       } else if (tab && tab.continua && tab.lim) {
         inicio = Lc.findIndex(l => tab.tipo === 'itens' ? ehAncora(l, tab).ancora : l.toks.length > 0);
         if (inicio >= 0 && tab.tipo === 'itens') {
@@ -477,6 +486,21 @@
           dados.push(l); fim = k + 1;
         }
         if (!tab.lim || novo) tab.lim = limitesColunas(tab.cols, dados.flatMap(l => l.toks), V, tab.y1, dados.length ? dados[dados.length - 1].y1 : tab.y1 + 1);
+        if (novo && tab.tipo === 'itens' && dados.length >= 2) {
+          const ks = () => new Set(tab.cols.map(c => c.chave));
+          const numerica = j => dados.filter(l => l.toks.some(t => colunaDe(tab.lim, (t.x0 + t.x1) / 2) === j && ehNumero(t.t))).length >= 0.6 * dados.filter(l => ehAncora(l, tab).ancora).length;
+          const nomes = { pesoBruto: 'GROSS WEIGHT', pesoLiq: 'NET WEIGHT', total: 'TOTAL', preco: 'PRICE' };
+          const inferir = (j, k) => { const c = tab.cols[j]; if (c && !c.chave && !ks().has(k) && numerica(j)) { c.chave = k; c.texto = nomes[k] + ' [' + c.texto + ']'; } };
+          tab.cols.forEach((c, j) => {
+            const esq = tab.cols[j - 1] && tab.cols[j - 1].chave, dir = tab.cols[j + 1] && tab.cols[j + 1].chave;
+            if (c.chave) return;
+            if (esq === 'pesoLiq') inferir(j, 'pesoBruto');
+            else if (dir === 'pesoBruto') inferir(j, 'pesoLiq');
+            else if (esq === 'pesoBruto' || (esq === 'preco' && !ks().has('total'))) inferir(j, 'total');
+            else if (dir === 'pesoLiq' || (dir === 'total' && esq === 'unidade')) inferir(j, 'preco');
+          });
+          if (tab.linhaCab) tab.linhaCab.cel.forEach(x => { if (x.col) x.t = x.col.texto; });
+        }
         linhasLogicas(dados, tab, H).forEach(g => {
           saida.push({ y: offset + g[0].l.y0, cel: celulasDoGrupo(g).map(c => ({ x: tab.cols[c.j].x0, t: c.t, conf: c.conf })) });
         });

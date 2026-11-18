@@ -521,8 +521,8 @@
     ['portoDescarga', /^PORT\s+OF\s+DISCHARGE/],
     ['destinoFinal', /^(FINAL\s+DESTINATION|PLACE\s+OF\s+DELIVERY)/],
     ['transbordo', /^PORT\s+OF\s+TRANSHIPMENT/],
-    ['navio', /^(OCEAN\s+)?VESSEL/],
-    ['numero', /^(BILL\s+OF\s+LADING\s+NO|B\/L\s+(NO|NUMBER)|BL\s+(NO|NUMBER)|HBL\s+NO|HOUSE\s+B\/L)/],
+    ['navio', /^((OCEAN\s+)?VESSEL|EXPORT\s+CARRIER)/],
+    ['numero', /^(BILL\s+OF\s+LADING\s+NO|B\/L\s+(NO|NUMBER)|BL\s+(NO|NUMBER)|HBL\s+NO|HOUSE\s+B\/L|DOCUMENT\s+NO)/],
     ['paisOrigem', /^COUNTRY\s+OF\s+ORIGIN/],
     ['refEmbarcador', /^SHIPPER'?S\s+REF/],
     ['agente', /^(F\/AGENT|FORWARDING\s+AGENT|DELIVERY\s+AGENT)/]
@@ -577,6 +577,7 @@
         if (cab.cubagem == null && num(g('cubagem')) != null) cab.cubagem = num(g('cubagem'));
       }
     }
+    if (!desc.length) { const ini = L.findIndex(r => (r || []).some(v => /GOODS|DESCRIPTION|COMMODIT|PARTS\s+FOR/.test(norm(v)))); (ini >= 0 ? L.slice(ini) : L).forEach(r => { const t = (r || []).map(cel).filter(v => v.trim()).join(' '); if (t) desc.push(t); }); }
     const D = desc.join('\n');
     cab.descricaoCompleta = D;
     cab.descricao = (D.split(/\r?\n/).find(s => s.trim()) || '').trim();
@@ -599,6 +600,9 @@
     const tudo = norm(L.map(r => (r || []).map(cel).join(' ')).join(' '));
     const cont = /\b([A-Z]{3}U\s?\d{7})\b/.exec(ND) || /\b([A-Z]{3}U\s?\d{7})\b/.exec(tudo); cab.container = cont ? cont[1].replace(/\s/g, '') : null;
     const lac = /SEAL\s*(?:NO\.?)?\s*[:：]\s*([A-Z0-9\-]{4,})/.exec(ND); cab.lacre = lac ? lac[1] : null;
+    // totais na linha "TOTALS: 152 PKG 45662.660 Kg 163.277 m3" (BL sem tabela)
+    const tl = /TOTA(?:L|IS)S?\s*[:：]?\s*(\d[\d.,]*)\s*(PKGS?|PACKAGES|CARTONS|CTNS|PLTS?|PALLETS|VOLUMES)\s*(\d[\d.,\s]*?)\s*KGS?\b\s*(\d[\d.,]*)?\s*(M3|CBM)?/.exec(ND);
+    if (tl) { if (cab.volumesTexto == null) cab.volumesTexto = tl[1] + ' ' + tl[2]; if (cab.pesoBruto == null) cab.pesoBruto = num(tl[3].replace(/\s/g, '')); if (cab.cubagem == null && tl[4]) cab.cubagem = num(tl[4]); }
     if (cab.volumesTexto) {
       const m = /(\d[\d.,]*)\s*([A-Za-z][A-Za-z ]*)?/.exec(cab.volumesTexto);
       cab.volumes = m ? { qtd: num(m[1]), especie: (m[2] || '').trim().toUpperCase() || null } : null;
@@ -685,6 +689,31 @@
     return { tipo: 'relatorio', aba: alvo.aba.nome, cab, itens, totais, colunas: cols, avisos };
   }
   C.lerRelatorio = lerRelatorio;
+
+  /* ============================== planilha de validação de diferimento de ICMS ============================== */
+  function lerDiferimento(abas) {
+    for (const a of abas) {
+      for (let r = 0; r < Math.min(a.linhas.length, 15); r++) {
+        const row = (a.linhas[r] || []).map(norm);
+        const ic = row.findIndex(v => /^COD(IGO|\.)?\s*PRINCIPAL$|^CODIGO$/.test(v)), inc = row.findIndex(v => v === 'NCM');
+        const idf = row.findIndex(v => /^DIFERIMENTO/.test(v));
+        if (ic < 0 || inc < 0 || idf < 0) continue;
+        const col = re => row.findIndex(v => re.test(v));
+        const c = { desc: col(/^DESCRICAO/), fin: col(/^FINALIDADE/), prot: col(/^PROTOCOLO/), ex: col(/^EX[-\s]?TARIFARIO/), tex: col(/^TEXTO\s*EX/) };
+        const g = (lin, k) => k < 0 ? '' : cel(lin[k]).trim();
+        const itens = [];
+        for (let k = r + 1; k < a.linhas.length; k++) {
+          const lin = a.linhas[k] || [];
+          const cod = g(lin, ic);
+          if (!cod) continue;
+          itens.push({ linha: k + 1, codigo: cod, descricao: g(lin, c.desc), ncm: ncmLimpa(lin[inc]), finalidade: g(lin, c.fin), diferimento: g(lin, idf), protocolo: g(lin, c.prot), ex: g(lin, c.ex), textoEx: g(lin, c.tex) });
+        }
+        return { tipo: 'diferimento', aba: a.nome, itens, avisos: itens.length ? [] : ['Planilha de diferimento sem itens.'] };
+      }
+    }
+    return null;
+  }
+  C.lerDiferimento = lerDiferimento;
 
   /* ============================== catálogo de produtos ============================== */
   const ehAtivo = p => /^ATIVAD/.test(norm(p.situacao));

@@ -7,7 +7,7 @@
   const sb = window.supabase.createClient(CFG.url, CFG.key, { auth: { persistSession: true, autoRefreshToken: true, storageKey: 'agil-confere-auth' } });
   const SEM_CI = '(sem código interno)';
   const FASES = { pre_alerta: 'Pré-alerta', pre_registro: 'Pré-registro' };
-  const TIPOS = { invoice_packing: 'Invoice + Packing List', invoice: 'Invoice', packing: 'Packing List', bl: 'Draft HBL', txt: 'TXT (TOTVS)', relatorio: 'Relatório de itens', ce: 'CE Mercante', outro: 'Outro' };
+  const TIPOS = { invoice_packing: 'Invoice + Packing List', invoice: 'Invoice', packing: 'Packing List', bl: 'Draft HBL', txt: 'TXT (TOTVS)', relatorio: 'Relatório de itens', diferimento: 'Planilha de diferimento de ICMS', ce: 'CE Mercante', outro: 'Outro' };
   const SEV_NOME = { bloqueante: 'Bloqueante', alerta: 'Alerta', info: 'Informativo' };
   const DOCS_ACAO = ['Invoice', 'Packing List', 'HBL', 'CE Mercante', 'TXT', 'Relatório de itens', 'Catálogo de Produtos', 'Outro'];
   let EU = null, IMP = null, CAT = null, REGRAS_DB = null, ACESSO = [];
@@ -296,8 +296,8 @@
 
   /* ---------------- nova análise ---------------- */
   const SLOTS = {
-    pre_alerta: [['invoice', 'Invoice (+ packing list)', 'PDF, imagem ou planilha do exportador. Se o packing list (ou o BL) estiver no mesmo arquivo, é lido junto.'], ['packing', 'Packing list', 'Opcional quando já vem na planilha da invoice.'], ['bl', 'Draft HBL', 'PDF, imagem ou planilha do draft.']],
-    pre_registro: [['txt', 'TXT do TOTVS', 'Arquivo .txt gerado no ERP da Eletra (layout SIGAEIC).'], ['invoice', 'Invoice final', 'PDF, imagem ou planilha da invoice.'], ['relatorio', 'Relatório de itens', 'Relatório de itens do Sigraweb (.xlsx).']]
+    pre_alerta: [['invoice', 'Invoice (+ packing list)', 'PDF, imagem ou planilha do exportador. Se o packing list (ou o BL) estiver no mesmo arquivo, é lido junto.'], ['packing', 'Packing list', 'Opcional quando já vem na planilha da invoice.'], ['bl', 'Draft HBL', 'PDF, imagem ou planilha do draft.'], ['diferimento', 'Planilha de diferimento de ICMS', 'Opcional. Planilha de validação do diferimento (.xlsx).']],
+    pre_registro: [['txt', 'TXT do TOTVS', 'Arquivo .txt gerado no ERP da Eletra (layout SIGAEIC).'], ['invoice', 'Invoice final', 'PDF, imagem ou planilha da invoice.'], ['relatorio', 'Relatório de itens', 'Relatório de itens do Sigraweb (.xlsx).'], ['diferimento', 'Planilha de diferimento de ICMS', 'Opcional. Planilha de validação do diferimento (.xlsx).']]
   };
   async function lerArquivo(file, progresso, alvo) {
     const buf = await file.arrayBuffer();
@@ -326,6 +326,8 @@
     if (/\.json$/i.test(nome)) return { file, buf, hash, nome, tipo: 'erro', erro: 'Para o catálogo, use a tela Catálogo de produtos.' };
     if (!/\.(xlsx|xlsm|xls|csv)$/i.test(nome)) return { file, buf, hash, nome, tipo: 'erro', erro: 'Formato não suportado. Envie PDF, imagem (JPG/PNG), planilha (.xlsx) ou .txt.' };
     const abas = C.lerPastaTrabalho(XLSX, buf);
+    const dif = C.lerDiferimento(abas);
+    if (dif && dif.itens.length) return { file, buf, hash, nome, tipo: 'diferimento', diferimento: dif };
     const rel = C.lerRelatorio(abas);
     if (rel.itens.length) return { file, buf, hash, nome, tipo: 'relatorio', relatorio: rel };
     const ehBL = abas.some(a => (a.linhas.slice(0, 4).flat().some(v => /^BILL OF LADING$|^(HOUSE )?B\/L$/.test(U.norm(v)))));
@@ -351,6 +353,8 @@
       const t = x.txt, p = t.processos[0];
       L.push(`<b>TXT de ${U.fmtData(t.itdi && t.itdi.data)}</b>${t.itdi && t.itdi.usuario ? ` (${esc(t.itdi.usuario)})` : ''} · ref. ${esc(p && p.capi ? p.capi.refCliente : '?')}`);
       if (p) L.push(`${p.itens.length} linhas de item (${new Set(p.itens.map(i => U.normCod(i.codigo))).size} códigos) · frete ${esc(U.moedaISO(p.cap2 && p.cap2.moedaFrete) || '')} ${U.fmt(p.cap2 ? (p.cap2.fretePrepaid || 0) + (p.cap2.freteCollect || 0) : null)}`);
+    } else if (slot === 'diferimento' && x.diferimento) {
+      L.push(`<b>Planilha de diferimento</b> · ${x.diferimento.itens.length} códigos (aba ${esc(x.diferimento.aba)})`);
     } else if (slot === 'relatorio' && x.relatorio) {
       const r = x.relatorio;
       L.push(`<b>Relatório ${esc(r.cab.refAgil || '')}</b> · ref. ${esc(r.cab.refCliente || '?')} · ${r.itens.length} linhas · ${esc(r.cab.moeda || '')} (taxa ${U.fmtAuto(r.cab.taxaMoeda, 4)})`);
@@ -372,6 +376,11 @@
   };
   const CAMPOS_TOT = [['totais.qtd', 'Qtd total'], ['totais.total', 'Valor total'], ['totais.pesoLiq', 'Peso líq. total'], ['totais.pesoBruto', 'Peso bruto total']];
   const CAMPOS_ITEM = { invoice: [['seq', 'Nº', 'n'], ['ncm', 'NCM'], ['codigo', 'Código'], ['descricao', 'Descrição'], ['qtd', 'Qtd', 'n'], ['unidade', 'Un.'], ['preco', 'Preço', 'n'], ['total', 'Total', 'n'], ['pesoLiq', 'Peso líq.', 'n'], ['pesoBruto', 'Peso bruto', 'n'], ['po', 'PO']], packing: [['seq', 'Nº', 'n'], ['ncm', 'NCM'], ['codigo', 'Código'], ['descricao', 'Descrição'], ['qtd', 'Qtd', 'n'], ['pesoLiq', 'Peso líq.', 'n'], ['pesoBruto', 'Peso bruto', 'n']] };
+  const OBRIG = {
+    invoice: ['numero', 'data', 'incoterm', 'moeda', 'pagamento', 'paisOrigem', 'paisAquisicao', 'paisProcedencia', 'exportador.nome', 'exportador.endereco', 'importador.nome', 'importador.cnpj', 'importador.endereco'],
+    packing: ['volumes.qtd', 'volumes.especie', 'marcas'],
+    bl: ['shipper.nome', 'consignee.nome', 'consignee.cnpj', 'notify.nome', 'portoEmbarque', 'portoDescarga', 'pesoBruto', 'volumes.qtd', 'marcas']
+  };
   const pegar = (o, c) => c.split('.').reduce((a, k) => a == null ? null : a[k], o);
   function pôr(o, c, v) { const ks = c.split('.'); let a = o; ks.slice(0, -1).forEach(k => { if (a[k] == null || typeof a[k] !== 'object') a[k] = {}; a = a[k]; }); a[ks[ks.length - 1]] = v; }
   // conferência automática: o que não fecha pode ser erro de leitura ou do próprio documento
@@ -396,7 +405,7 @@
   function leituraPendente(x) {
     if (!x || !x.leitura || x.revisado || !docsDoSlot(x).length) return false;
     if (x.leitura.origem === 'ocr') return true;
-    return docsDoSlot(x).some(([t, d]) => t !== 'bl' && checagens(d, t).length);
+    return docsDoSlot(x).some(([t, d]) => (t !== 'bl' && checagens(d, t).length) || OBRIG[t].some(c => { const v = pegar(d.cab, c); return v == null || v === ''; }));
   }
   function telaConferencia(slot, x, aoConfirmar) {
     const docs = docsDoSlot(x);
@@ -410,7 +419,7 @@
     const inp = (v, attrs, cls) => `<input class="in ${cls || ''}" ${attrs} value="${esc(v == null ? '' : v)}">`;
     const html = docs.map(([t, d]) => {
       const cab = t === 'bl' ? d.cab : d.cab;
-      const campos = CAMPOS_CAB[t].map(([c, n, tp]) => `<div><label>${esc(n)}</label>${inp(pegar(cab, c), `data-d="${t}" data-c="cab.${c}" data-t="${tp || ''}"`)}</div>`).join('');
+      const campos = CAMPOS_CAB[t].map(([c, n, tp]) => { const v = pegar(cab, c), ob = OBRIG[t].includes(c); return `<div><label>${esc(n)}${ob ? ' *' : ''}</label>${inp(v, `data-d="${t}" data-c="cab.${c}" data-t="${tp || ''}" ${ob ? 'data-ob="1"' : ''}`, ob && (v == null || v === '') ? 'vaz' : '')}</div>`; }).join('');
       const tots = t === 'bl' ? '' : CAMPOS_TOT.filter(([c]) => t === 'invoice' || c !== 'totais.total').map(([c, n]) => `<div><label>${esc(n)}</label>${inp(pegar(d, c), `data-d="${t}" data-c="${c}" data-t="n"`)}</div>`).join('');
       const itens = t === 'bl' ? `<label class="f">Descrição da carga</label><textarea class="in" data-d="bl" data-c="cab.descricaoCompleta" style="min-height:120px">${esc(d.cab.descricaoCompleta || '')}</textarea>` :
         `<div class="tbw"><table class="tb"><thead><tr>${CAMPOS_ITEM[t].map(([, n]) => `<th>${esc(n)}</th>`).join('')}</tr></thead><tbody>${d.itens.map((i, k) => `<tr>${CAMPOS_ITEM[t].map(([c, , tp]) => { const cf = confDe(d, i, c); return `<td>${inp(i[c], `data-d="${t}" data-k="${k}" data-c="${c}" data-t="${tp || ''}" title="${cf != null ? 'confiança da leitura: ' + cf + '%' : ''}"`, (c === 'descricao' ? 'dsc ' : '') + (cf != null && cf < 80 ? 'duv' : ''))}</td>`; }).join('')}</tr>`).join('')}</tbody></table></div>`;
@@ -441,13 +450,14 @@
     });
     const atualizar = () => {
       docs.forEach(([t, d]) => {
-        if (t === 'bl') return;
+        if (t === 'bl') { const vz = $$(`[data-d="bl"][data-ob]`, m.el).filter(el => { const v = !el.value.trim(); el.classList.toggle('vaz', v); return v; }).length; $('[data-ck="bl"]', m.el).innerHTML = vz ? `<b>${vz} campo(s) obrigatório(s) em branco</b> (em laranja): se a informação aparece no documento, preencha; se não aparece, deixe em branco que vira ocorrência.` : '<span class="okk">✓ Campos principais preenchidos.</span>'; return; }
         const tmp = { itens: d.itens.map((i, k) => { const o = Object.assign({}, i); $$(`[data-d="${t}"][data-k="${k}"]`, m.el).forEach(el => { if (el.dataset.t === 'n') o[el.dataset.c] = el.value.trim() === '' ? null : U.num(el.value); }); return o; }), totais: {} };
         $$(`[data-d="${t}"][data-c^="totais."]`, m.el).forEach(el => { tmp.totais[el.dataset.c.slice(7)] = el.value.trim() === '' ? null : U.num(el.value); });
         const ck = checagens(tmp, t);
         $$(`[data-d="${t}"]`, m.el).forEach(el => el.classList.remove('err'));
         ck.forEach(c => { if (c.tot) { const el = $(`[data-d="${t}"][data-c="totais.${c.tot}"]`, m.el); if (el) el.classList.add('err'); } else c.campos.forEach(cp => { const el = $(`[data-d="${t}"][data-k="${c.k}"][data-c="${cp}"]`, m.el); if (el) el.classList.add('err'); }); });
-        $(`[data-ck="${t}"]`, m.el).innerHTML = ck.length ? `<b>${ck.length} ponto(s) para conferir</b> (erro de leitura ou divergência do próprio documento; se o documento estiver assim, deixe como está que vira ocorrência):<br>${ck.slice(0, 12).map(c => '• ' + esc(c.msg)).join('<br>')}${ck.length > 12 ? '<br>…' : ''}` : '<span class="okk">✓ Itens e totais fecham.</span>';
+        const vazios = $$(`[data-d="${t}"][data-ob]`, m.el).filter(el => { const v = !el.value.trim(); el.classList.toggle('vaz', v); return v; }).length;
+        $(`[data-ck="${t}"]`, m.el).innerHTML = (vazios ? `<b>${vazios} campo(s) obrigatório(s) em branco</b> (em laranja): se a informação aparece no documento, preencha; se não aparece, deixe em branco que vira ocorrência.<br>` : '') + (ck.length ? `<b>${ck.length} ponto(s) para conferir</b> (erro de leitura ou divergência do próprio documento; se o documento estiver assim, deixe como está que vira ocorrência):<br>${ck.slice(0, 12).map(c => '• ' + esc(c.msg)).join('<br>')}${ck.length > 12 ? '<br>…' : ''}` : '<span class="okk">✓ Itens e totais fecham.</span>');
       });
     };
     m.el.addEventListener('input', atualizar);
@@ -475,6 +485,7 @@
         let corpo = '';
         if (x && x.erro) corpo = `<div class="file err">${esc(x.nome)}: ${esc(x.erro)}</div>`;
         else if (x) corpo = `<div class="file">${esc(x.nome)}<br>${resumoDoc(k, x)}${x.aviso ? `<div class="warn">${esc(x.aviso)}</div>` : ''}<div><button class="bt3" data-limpa="${k}">remover</button></div></div>`;
+        else if (k === 'packing' && S.slots.invoice && S.slots.invoice.packing) { const p = S.slots.invoice.packing; corpo = `<div class="file" style="border-color:var(--ok)">✓ <b>Lido do mesmo arquivo da invoice</b> (${esc(S.slots.invoice.nome)}): ${p.itens.length} itens${p.cab.volumes ? `, ${p.cab.volumes.qtd} ${esc(p.cab.volumes.especie || '')}` : ''}. Não precisa enviar de novo.</div>`; }
         else if (ant) corpo = `<div class="file"><label><input type="checkbox" data-ant="${k}" ${ant.usar ? 'checked' : ''}> Reaproveitar <b>${esc(ant.arquivo_nome)}</b></label><div class="sm mut">enviado em ${dataHora(ant.enviado_em)} por ${esc(nomeUsuario(ant.enviado_por))}</div></div>`;
         return `<div class="drop" data-slot="${k}"><h3>${esc(t)}</h3><div class="hint">${esc(h)}</div>${corpo}<div><label class="bt2" style="cursor:pointer">Escolher arquivo<input type="file" hidden data-in="${k}" accept=".pdf,.xlsx,.xls,.xlsm,.txt,.csv,.jpg,.jpeg,.png"></label></div></div>`;
       }).join('');
@@ -491,6 +502,7 @@
         if (x.tipo === 'txt') { if (S.fase !== 'pre_registro') { S.fase = 'pre_registro'; marcarFase(); } S.slots.txt = x; }
         else if (x.tipo === 'relatorio') { if (S.fase !== 'pre_registro') { S.fase = 'pre_registro'; marcarFase(); } S.slots.relatorio = x; }
         else if (x.tipo === 'bl') S.slots.bl = x;
+        else if (x.tipo === 'diferimento') S.slots.diferimento = x;
         else if (x.tipo === 'invoice_packing' || x.tipo === 'invoice') { S.slots.invoice = x; if (x.packing && S.fase === 'pre_alerta') delete S.slots.packing; if (x.blJunto && S.fase === 'pre_alerta') S.slots.bl = { nome: x.nome + ' (BL no mesmo PDF)', tipo: 'bl', bl: x.blJunto, deArquivo: 'invoice' }; }
         else if (x.tipo === 'packing') S.slots.packing = x;
         else if (x.tipo === 'outro') { S.slots['outro_' + x.hash.slice(0, 6)] = x; toast(x.aviso); }
@@ -555,6 +567,7 @@
           else if (k === 'bl') docs.bl = x.bl;
           else if (k === 'txt') docs.txt = x.txt;
           else if (k === 'relatorio') docs.relatorio = x.relatorio;
+          else if (k === 'diferimento') docs.diferimento = x.diferimento;
         } else {
           const d = await pegarAnterior(k);
           if (d && d.extraido) {
@@ -564,6 +577,7 @@
             if (k === 'bl' && !docs.bl) docs.bl = e.bl || null;
             if (k === 'txt' && !docs.txt) docs.txt = e.txt || null;
             if (k === 'relatorio' && !docs.relatorio) docs.relatorio = e.relatorio || null;
+            if (k === 'diferimento' && !docs.diferimento) docs.diferimento = e.diferimento || null;
             if (!usados.some(u => u.id === d.id)) usados.push({ id: d.id, tipo: d.tipo, arquivo_nome: d.arquivo_nome, hash: d.arquivo_hash, reaproveitado: true });
           }
         }
@@ -588,7 +602,7 @@
         const caminho = `processos/${proc.id}/${Date.now()}-${nomeSeguro(x.nome)}`;
         const up = await sb.storage.from('confere').upload(caminho, x.file, { upsert: false, contentType: x.file.type || 'application/octet-stream' });
         if (up.error) throw up.error;
-        const extraido = { invoice: x.invoice || null, packing: x.packing || null, bl: x.bl || x.blJunto || null, txt: x.txt || null, relatorio: x.relatorio || null, leitura: x.leitura ? Object.assign({}, x.leitura, { revisado: x.revisado || null }) : null };
+        const extraido = { invoice: x.invoice || null, packing: x.packing || null, bl: x.bl || x.blJunto || null, txt: x.txt || null, relatorio: x.relatorio || null, diferimento: x.diferimento || null, leitura: x.leitura ? Object.assign({}, x.leitura, { revisado: x.revisado || null }) : null };
         const [d] = await dados(sb.from('confere_documentos').insert({ processo_id: proc.id, tipo: x.tipo === 'erro' ? 'outro' : x.tipo, arquivo_nome: x.nome, arquivo_hash: x.hash, tamanho: x.file.size, storage_path: caminho, extraido }).select('id,tipo,arquivo_nome,arquivo_hash'));
         usados.push({ id: d.id, tipo: d.tipo, arquivo_nome: d.arquivo_nome, hash: d.arquivo_hash });
       }

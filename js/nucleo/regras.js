@@ -9,12 +9,12 @@
   const { norm, normCod, alnum, num, arred, iguais, fmt, fmtAuto, fmtNcm, ncmLimpa, moedaISO, paisCodigo, paisNome, unidadeBase, INCOTERMS, INCOTERM_COM_FRETE, INCOTERM_COM_SEGURO } = U;
   const VERSAO_MOTOR = '1.0 (18/11/2026)';
 
-  const COM_ARTIGO = { invoice: 'a invoice', packing: 'o packing list', bl: 'o BL', ce: 'o CE Mercante', txt: 'o TXT', relatorio: 'o relatório de itens', catalogo: 'o Catálogo de Produtos', processo: 'o processo' };
+  const COM_ARTIGO = { diferimento: 'a planilha de diferimento', invoice: 'a invoice', packing: 'o packing list', bl: 'o BL', ce: 'o CE Mercante', txt: 'o TXT', relatorio: 'o relatório de itens', catalogo: 'o Catálogo de Produtos', processo: 'o processo' };
   const listaPt = l => l.length <= 1 ? (l[0] || '') : l.slice(0, -1).join(', ') + ' e ' + l[l.length - 1];
   const INTERNAS = new Set(['CAT-03', 'CAT-05', 'CAT-06', 'REL-01', 'REL-05', 'ITM-09', 'TXT-13', 'TXT-08', 'BL-16']);
-  const incluirPorPadrao = a => a.severidade !== 'info' && !INTERNAS.has(a.regra) && a.documento !== 'relatorio';
-  const DOCS = { invoice: 'Invoice', packing: 'Packing List', bl: 'HBL', ce: 'CE Mercante', txt: 'TXT (ERP)', relatorio: 'Relatório de itens', catalogo: 'Catálogo de Produtos', processo: 'Processo' };
-  const SECOES = [['invoice', 'INVOICE'], ['packing', 'PACKING LIST'], ['bl', 'HBL'], ['ce', 'CE MERCANTE'], ['txt', 'TXT'], ['relatorio', 'RELATÓRIO DE ITENS'], ['catalogo', 'CATÁLOGO DE PRODUTOS'], ['processo', 'OBSERVAÇÕES GERAIS']];
+  const incluirPorPadrao = a => a.severidade !== 'info' && !INTERNAS.has(a.regra) && a.documento !== 'relatorio' && a.documento !== 'diferimento';
+  const DOCS = { invoice: 'Invoice', packing: 'Packing List', bl: 'HBL', ce: 'CE Mercante', txt: 'TXT (ERP)', relatorio: 'Relatório de itens', diferimento: 'Planilha de diferimento de ICMS', catalogo: 'Catálogo de Produtos', processo: 'Processo' };
+  const SECOES = [['invoice', 'INVOICE'], ['packing', 'PACKING LIST'], ['bl', 'HBL'], ['ce', 'CE MERCANTE'], ['txt', 'TXT'], ['relatorio', 'RELATÓRIO DE ITENS'], ['diferimento', 'PLANILHA DE DIFERIMENTO DE ICMS'], ['catalogo', 'CATÁLOGO DE PRODUTOS'], ['processo', 'OBSERVAÇÕES GERAIS']];
   const PESO_SEV = { bloqueante: 3, alerta: 2, info: 1 };
   const ACOES = { ajuste_cliente: 'Ajuste Cliente', ajuste_catalogo: 'Ajuste Catálogo', ajuste_documento: 'Ajuste Documento', ciente_ok: 'Ciente e OK' };
   const F1 = 'pre_alerta', F3 = 'pre_registro', AMBAS = [F1, F3];
@@ -80,6 +80,8 @@
     ['ITM-09', 'Descrição do relatório de itens x catálogo vigente', 'relatorio', 'alerta', 'Controle interno', [F3]],
     ['ITM-10', 'País de origem do item', 'txt', 'alerta', 'Conferência entre documentos', [F3]],
     ['ITM-11', 'Fabricante do item', 'txt', 'alerta', 'Conferência entre documentos', [F3]],
+    ['DIF-01', 'Item validado na planilha de diferimento de ICMS', 'diferimento', 'alerta', 'Controle interno (diferimento de ICMS)', AMBAS],
+    ['DIF-02', 'Diferimento e finalidade do item', 'diferimento', 'info', 'Controle interno (diferimento de ICMS)', AMBAS],
     ['CAT-01', 'Produto cadastrado no catálogo', 'catalogo', 'bloqueante', 'Catálogo de Produtos (Portal Único)', AMBAS],
     ['CAT-02', 'Produto ativo no catálogo', 'catalogo', 'bloqueante', 'Catálogo de Produtos (Portal Único)', AMBAS],
     ['CAT-03', 'Um único produto ativo por código interno', 'catalogo', 'alerta', 'Catálogo de Produtos (Portal Único)', AMBAS],
@@ -118,7 +120,7 @@
         if (!a.sugestao) a.sugestao = a.mensagem;
         if (!a.acaoDocumento && a.acao === 'ajuste_documento') a.acaoDocumento = DOCS[a.documento] || null;
         if (a.incluirPdf == null) a.incluirPdf = incluirPorPadrao(a);
-        a.interna = INTERNAS.has(a.regra) || a.documento === 'relatorio';
+        a.interna = INTERNAS.has(a.regra) || a.documento === 'relatorio' || a.documento === 'diferimento';
         a.chave = [a.regra, a.documento, a.item || '', a.campo || '', String(a.encontrado || '')].join('|');
         if (lista.some(x => x.chave === a.chave)) return null;
         a.id = 'a' + (++n);
@@ -431,6 +433,7 @@
       const o = pega(l[0].codigo);
       o.rel = { linhas: l, adicoes: [...new Set(l.map(i => i.adicao))], ncms: [...new Set(l.map(i => i.ncm).filter(Boolean))], qtd: soma(l, 'qtd'), precos: [...new Set(l.map(i => arred(i.unitMoeda, 6)).filter(v => v != null))], total: soma(l, 'totalMoeda'), pesoLiq: soma(l, 'pesoLiq'), unidade: l[0].unidade, descricao: l[0].descricao, fabricante: l[0].fabricante, aliquotas: { II: l[0].aliqII, IPI: l[0].aliqIPI, PIS: l[0].aliqPIS, COFINS: l[0].aliqCOFINS } };
     });
+    if (x.dif) agregar(x.dif.itens, i => normCod(i.codigo)).forEach(l => { const o = mapa.get(normCod(l[0].codigo)); if (o) o.dif = { ncms: [...new Set(l.map(i => i.ncm).filter(Boolean))], diferimento: l[0].diferimento, finalidade: l[0].finalidade, ex: l[0].ex }; });
     const itens = [];
     mapa.forEach(o => {
       const cod = o.codigo, ref = cod.startsWith('#') ? `nº ${cod.slice(1)}` : cod;
@@ -470,6 +473,11 @@
       if (o.inv) o.inv.ncms.forEach(n => fontesNcm.push(['invoice', n, 1]));
       if (o.txt) o.txt.ncms.forEach(n => fontesNcm.push(['txt', n, 1]));
       if (o.rel) o.rel.ncms.forEach(n => fontesNcm.push(['relatorio', n, 1]));
+      if (o.dif) o.dif.ncms.forEach(n => fontesNcm.push(['diferimento', n, 1]));
+      if (x.dif && !cod.startsWith('#')) {
+        if (!o.dif) add('DIF-01', { campo: 'Item', encontrado: 'não consta', esperado: 'item validado', mensagem: `Item ${ref} não consta na planilha de validação do diferimento de ICMS.`, sugestao: `Incluir o item ${ref} na planilha de validação do diferimento de ICMS.` });
+        else if (String(o.dif.diferimento).trim() !== '1') add('DIF-02', { campo: 'Diferimento', encontrado: o.dif.diferimento || 'em branco', esperado: '1 (com diferimento)', mensagem: `Item ${ref} sem diferimento marcado na planilha (${o.dif.finalidade || 'finalidade não informada'}).`, sugestao: `Confirmar o tratamento de ICMS do item ${ref}.`, acao: 'ciente_ok' });
+      }
       if (o.cat && o.cat.produto) fontesNcm.push(['catalogo', o.cat.produto.ncm, 1.5]);
       fontesNcm.forEach(([, n, w]) => votos.set(n, (votos.get(n) || 0) + w));
       let refN = null, best = -1;
@@ -481,6 +489,7 @@
         const txtRef = `${listaPt(docsRef.map(d => COM_ARTIGO[d]))} (${fmtNcm(refN)})`;
         const sug = doc === 'catalogo'
           ? `NCM do item ${ref} no Catálogo de Produtos (${fmtNcm(n)}) diverge dos documentos (${fmtNcm(refN)}). Avaliar atualização do catálogo.`
+          : doc === 'diferimento' ? `Planilha de diferimento de ICMS com NCM ${fmtNcm(n)} para o item ${ref}; referência ${txtRef}. Atualizar a planilha.`
           : doc === 'relatorio' ? `Relatório de itens/numerário calculado com NCM ${fmtNcm(n)} para o item ${ref}; referência ${txtRef}. Atualizar relatório e numerário.`
             : `Notar que o item ${ref} está com a NCM ${fmtNcm(n)} ${doc === 'txt' ? 'no TXT' : 'na invoice'}, em desconformidade com ${txtRef}. Gentileza verificar.`;
         add('ITM-02', { documento: doc, campo: 'NCM', encontrado: fmtNcm(n), esperado: `${fmtNcm(refN)} (${nomesRef.join(', ')})`, mensagem: `NCM do item ${ref}: ${DOCS[doc]} ${fmtNcm(n)} × ${txtRef}.`, sugestao: sug, acao: doc === 'catalogo' ? 'ajuste_catalogo' : 'ajuste_documento' });
@@ -553,7 +562,7 @@
     const docs = entrada.docs || {};
     const x = {
       fase, f3: fase === F3, proc: entrada.processo || {}, inv: docs.invoice || null, pkl: docs.packing || null, bl: docs.bl || null,
-      txt: docs.txt || null, rel: docs.relatorio || null, cat: entrada.catalogo || null, A: coletor(fase, entrada.regrasDesligadas, entrada.severidades)
+      txt: docs.txt || null, rel: docs.relatorio || null, dif: docs.diferimento || null, cat: entrada.catalogo || null, A: coletor(fase, entrada.regrasDesligadas, entrada.severidades)
     };
     x.tp = x.txt && x.txt.processos && x.txt.processos[0] || null;
     regrasProcesso(x);
@@ -569,10 +578,10 @@
       const meus = achados.filter(a => a.item && normCod(a.item) === normCod(o.codigo.startsWith('#') ? `nº ${o.codigo.slice(1)}` : o.codigo));
       const sev = meus.reduce((m, a) => Math.max(m, PESO_SEV[a.severidade]), 0);
       const limpa = v => v && Object.fromEntries(Object.entries(v).filter(([k]) => k !== 'linhas'));
-      return { codigo: o.codigo, ncmReferencia: o.ncmReferencia, status: sev === 3 ? 'bloqueante' : sev === 2 ? 'alerta' : sev === 1 ? 'info' : 'ok', invoice: limpa(o.inv), packing: o.pkl, txt: limpa(o.txt), relatorio: limpa(o.rel), catalogo: o.cat, comparacaoFatura: o.comparacaoFatura || null, comparacaoTxt: o.comparacaoTxt || null, achados: meus.map(a => a.id) };
+      return { codigo: o.codigo, ncmReferencia: o.ncmReferencia, status: sev === 3 ? 'bloqueante' : sev === 2 ? 'alerta' : sev === 1 ? 'info' : 'ok', invoice: limpa(o.inv), packing: o.pkl, txt: limpa(o.txt), relatorio: limpa(o.rel), diferimento: o.dif || null, catalogo: o.cat, comparacaoFatura: o.comparacaoFatura || null, comparacaoTxt: o.comparacaoTxt || null, achados: meus.map(a => a.id) };
     });
     const cont = s => achados.filter(a => a.severidade === s).length;
-    const presentes = Object.entries({ invoice: x.inv, packing: x.pkl, bl: x.bl, txt: x.txt, relatorio: x.rel }).filter(([, v]) => v).map(([k]) => k);
+    const presentes = Object.entries({ invoice: x.inv, packing: x.pkl, bl: x.bl, txt: x.txt, relatorio: x.rel, diferimento: x.dif }).filter(([, v]) => v).map(([k]) => k);
     return {
       versaoMotor: VERSAO_MOTOR, fase, geradoEm: new Date().toISOString(),
       resumo: { bloqueantes: cont('bloqueante'), alertas: cont('alerta'), infos: cont('info'), itens: itens.length, itensComPendencia: itens.filter(i => i.status === 'bloqueante' || i.status === 'alerta').length, documentos: presentes, catalogo: x.cat ? x.cat.meta : null },
@@ -581,6 +590,7 @@
         packing: x.pkl ? { numero: x.pkl.cab.numero, volumes: x.pkl.cab.volumes, cubagem: x.pkl.cab.cubagem, madeira: x.pkl.cab.madeira, totais: x.pkl.totais, itens: x.pkl.itens.length } : null,
         bl: x.bl ? { numero: x.bl.cab.numero, portoEmbarque: x.bl.cab.portoEmbarque, portoDescarga: x.bl.cab.portoDescarga, pesoBruto: x.bl.cab.pesoBruto, volumes: x.bl.cab.volumes, ncms: x.bl.cab.ncms, container: x.bl.cab.container } : null,
         txt: x.tp ? { arquivo: x.txt.arquivo, data: x.txt.itdi && x.txt.itdi.data, usuario: x.txt.itdi && x.txt.itdi.usuario, referencia: x.tp.capi && x.tp.capi.refCliente, house: x.tp.capi && x.tp.capi.house, linhasItem: x.tp.itens.length, codigos: new Set(x.tp.itens.map(i => normCod(i.codigo))).size, frete: x.tp.cap2 ? { moeda: moedaISO(x.tp.cap2.moedaFrete), valor: (x.tp.cap2.fretePrepaid || 0) + (x.tp.cap2.freteCollect || 0) } : null, seguro: x.tp.cap2 && x.tp.cap2.valorSeguro ? { moeda: moedaISO(x.tp.cap2.moedaSeguro), valor: x.tp.cap2.valorSeguro } : null, pesoLiq: soma(x.tp.itens, 'pesoLiq'), pesoBruto: x.tp.capi && x.tp.capi.pesoBruto } : null,
+        diferimento: x.dif ? { aba: x.dif.aba, linhas: x.dif.itens.length } : null,
         relatorio: x.rel ? { refAgil: x.rel.cab.refAgil, refCliente: x.rel.cab.refCliente, moeda: x.rel.cab.moeda, taxaMoeda: x.rel.cab.taxaMoeda, taxaUsd: x.rel.cab.taxaUsd, totais: x.rel.totais, linhas: x.rel.itens.length } : null
       },
       achados, itens
@@ -606,7 +616,7 @@
     return { secoes, texto };
   }
 
-  REGRAS.forEach(r => { r.interna = INTERNAS.has(r.codigo) || r.documento === 'relatorio'; });
+  REGRAS.forEach(r => { r.interna = INTERNAS.has(r.codigo) || r.documento === 'relatorio' || r.documento === 'diferimento'; });
   C.regras = { REGRAS, MAPA, DOCS, COM_ARTIGO, SECOES, ACOES, PESO_SEV, VERSAO_MOTOR, analisar, montarParecer, fmtCnpj, incluirPorPadrao, fecha: (t, ult) => String(t).replace(/[;.:\s]+$/, '') + (ult ? '.' : ';') };
   C.analisar = analisar;
 })(typeof self !== 'undefined' ? self : this);

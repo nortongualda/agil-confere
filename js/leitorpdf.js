@@ -231,7 +231,7 @@
         cv.width = cv.height = 0;
       } else {
         usouOcr = true;
-        const esc = Math.min(3.5, 3600 / Math.max(vp.width, vp.height));
+        const esc = Math.min(3.5, (window.CONFERE_OCR_PX || 5000) / Math.max(vp.width, vp.height));
         const fz = Math.max(1, Math.max(vp.width, vp.height) / 842);
         let cv = await desenhar(page, esc);
         inclinacao = estimarInclinacao(cv);

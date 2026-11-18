@@ -478,13 +478,14 @@
       }).join('');
       $('#catInfo').innerHTML = CAT ? `Catálogo vigente: <b>${esc(CAT.meta.arquivo)}</b> (gerado em ${dataHora(CAT.meta.geradoEm)}, ${CAT.meta.total} produtos). <a href="#catalogo">Atualizar catálogo</a>` : `<span style="color:var(--err)">Nenhum catálogo carregado: a conferência por item no catálogo não será feita. <a href="#catalogo">Carregar catálogo</a></span>`;
     };
-    const atribuir = async files => {
+    const atribuir = async (files, alvo) => {
       for (const f of files) {
         const prog = $('#prog'); prog.textContent = 'Lendo ' + f.name + '…';
         let x;
         try { x = await lerArquivo(f, t => { prog.textContent = t; }); } catch (e) { x = { nome: f.name, erro: 'Falha ao ler: ' + erroMsg(e) }; }
         prog.textContent = '';
-        if (x.erro) { toast(`${f.name}: ${x.erro}`, true); continue; }
+        if (x.erro) { console.error('leitura', f.name, x.erro); toast(`${f.name}: ${x.erro}`, true); if (alvo) S.slots[alvo] = x; continue; }
+        if (x.tipo === 'outro' && alvo) { S.slots[alvo] = Object.assign(x, { erro: 'Não reconheci este arquivo como ' + ({ invoice: 'invoice', packing: 'packing list', bl: 'BL', txt: 'TXT', relatorio: 'relatório de itens' }[alvo] || 'documento') + '. Ele não será conferido. Envie o arquivo para o suporte (Norton) analisar o layout.' }); continue; }
         if (x.tipo === 'txt') { if (S.fase !== 'pre_registro') { S.fase = 'pre_registro'; marcarFase(); } S.slots.txt = x; }
         else if (x.tipo === 'relatorio') { if (S.fase !== 'pre_registro') { S.fase = 'pre_registro'; marcarFase(); } S.slots.relatorio = x; }
         else if (x.tipo === 'bl') S.slots.bl = x;
@@ -517,8 +518,8 @@
     const drops = $('#drops');
     drops.addEventListener('dragover', e => { e.preventDefault(); const d = e.target.closest('.drop'); $$('.drop').forEach(x => x.classList.toggle('on', x === d)); });
     drops.addEventListener('dragleave', e => { if (!drops.contains(e.relatedTarget)) $$('.drop').forEach(x => x.classList.remove('on')); });
-    drops.addEventListener('drop', e => { e.preventDefault(); $$('.drop').forEach(x => x.classList.remove('on')); atribuir([...e.dataTransfer.files]); });
-    drops.addEventListener('change', e => { const i = e.target.closest('input[data-in]'); if (i && i.files.length) atribuir([...i.files]); const a = e.target.closest('input[data-ant]'); if (a) S.anteriores[a.dataset.ant].usar = a.checked; });
+    drops.addEventListener('drop', e => { e.preventDefault(); $$('.drop').forEach(x => x.classList.remove('on')); const alvo = e.target.closest('.drop'); atribuir([...e.dataTransfer.files], alvo && alvo.dataset.slot); });
+    drops.addEventListener('change', e => { const i = e.target.closest('input[data-in]'); if (i && i.files.length) { atribuir([...i.files], i.dataset.in); i.value = ''; } const a = e.target.closest('input[data-ant]'); if (a) S.anteriores[a.dataset.ant].usar = a.checked; });
     drops.addEventListener('redesenhar', () => desenharSlots());
     drops.addEventListener('click', e => { const l = e.target.closest('[data-limpa]'); if (l) { delete S.slots[l.dataset.limpa]; desenharSlots(); } const r = e.target.closest('[data-rev]'); if (r) { const x = S.slots[r.dataset.rev]; if (x) telaConferencia(r.dataset.rev, x, desenharSlots); } });
     $('#bRodar').onclick = () => rodar(S, procs);

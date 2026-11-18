@@ -198,7 +198,7 @@
     view().onclick = null; view().onchange = null;
     try {
       if (h === 'painel') await vPainel();
-      else if (h.startsWith('p-')) await vProcesso(h.slice(2));
+      else if (h.startsWith('p-')) await vProcesso(h.slice(2, 38));
       else if (h.startsWith('a-')) await vAnalise(h.slice(2));
       else if (h.startsWith('nova')) await vNova(h.includes('-') ? h.split('-').slice(1).join('-') : null);
       else if (h === 'ocorrencias') await vOcorrencias();
@@ -269,14 +269,40 @@
     const pronto = ult3 && ult3.decisao === 'seguir' && !ocs.some(o => o.severidade === 'bloqueante');
     view().innerHTML = `<div class="top"><div><div class="eb">Processo</div><h1 class="tt">IP ${esc(p.ref_cliente)} <span>${esc(p.ref_agil || '')}</span></h1>
       <div class="sub">${esc(p.invoice ? 'Invoice ' + p.invoice : 'Invoice ainda não lida')} · ${esc(p.exportador || IMP.nome)} · <span class="badge st-${p.status}">${p.status === 'aberto' ? 'Em aberto' : p.status === 'registrado' ? 'Registrado' + (p.duimp ? ' · ' + p.duimp : '') : 'Cancelado'}</span> ${pronto ? '<span class="badge sev-ok">Pronto para registro</span>' : ''}</div></div>
-      <div class="acts"><button class="bt" id="bNova">+ Nova análise</button><button class="bt2" id="bEdit">Editar referências</button>${p.status === 'aberto' ? '<button class="bt2" id="bReg">Marcar como registrado</button>' : '<button class="bt2" id="bReab">Reabrir</button>'}</div></div>
+      <div class="acts"><button class="bt" id="bNova">+ Nova análise</button><button class="bt2" id="bEdit">Editar referências</button>${anals.some(a => a.fase === 'pre_alerta') && anals.some(a => a.fase === 'pre_registro') ? '<button class="bt2" id="bReTodas">Reanalisar as duas fases</button>' : ''}${EU.papel === 'master' ? '<button class="bt2" id="bExcl" style="color:var(--err)">Excluir processo</button>' : ''}${p.status === 'aberto' ? '<button class="bt2" id="bReg">Marcar como registrado</button>' : '<button class="bt2" id="bReab">Reabrir</button>'}</div></div>
       ${als.filter(a => a.status === 'aberto').length ? `<div class="banner al"><div><div class="t">${als.filter(a => a.status === 'aberto').length} alerta(s) de mudança no catálogo</div><div class="d">Itens deste processo mudaram no catálogo depois da última análise. Revise numerário, BL/CE, planilha de diferimento de ICMS e rode nova análise.</div></div><button class="bt2" onclick="location.hash='alertas'">Ver alertas</button></div>` : ''}
+      <div class="row r2">${['pre_alerta', 'pre_registro'].map(fz => { const u = anals.find(a => a.fase === fz); return `<div class="card"><h2>${fz === 'pre_alerta' ? 'Fase 1 · Pré-alerta' : 'Fase 3 · Pré-registro'}</h2><p class="cs">${fz === 'pre_alerta' ? 'Invoice, packing list e BL.' : 'TXT do TOTVS, invoice e/ou packing list finais e validação do diferimento de ICMS.'}</p>
+        ${u ? `<div class="sm">Última: <a href="#a-${u.id}">análise nº ${u.numero}</a> · ${dataHora(u.criado_em)} · ${esc(u.analista_nome)}</div><div style="margin:6px 0">${chipsResumo(u.resumo)} ${u.decisao ? (u.decisao === 'seguir' ? '<span class="badge sev-ok">Seguir</span>' : '<span class="badge sev-bloqueante">Não seguir</span>') : '<span class="badge">decisão pendente</span>'}</div>` : '<div class="sm mut" style="margin:6px 0">Ainda não analisada.</div>'}
+        <div class="acts"><button class="bt${u ? '2' : ''}" data-rodar="${fz}">${u ? 'Rodar com novos documentos' : 'Rodar fase'}</button>${u ? `<button class="bt" data-rean="${fz}" title="Mesmos documentos da última análise, com o catálogo e as regras atuais">Reanalisar</button>` : ''}</div></div>`; }).join('')}</div>
       <div class="card"><h2>Análises</h2><p class="cs">Cada análise guarda os documentos usados, o catálogo vigente na data e quem a realizou.</p>
       ${anals.length ? `<div class="tbw"><table class="tb"><thead><tr><th>Nº</th><th>Fase</th><th>Data</th><th>Analista</th><th>Resultado</th><th>Decisão</th><th>PDF</th></tr></thead><tbody>${anals.map(a => `<tr class="cl" data-a="${a.id}"><td><b>${a.numero}</b></td><td>${FASES[a.fase]}</td><td>${dataHora(a.criado_em)}</td><td>${esc(a.analista_nome)}</td><td>${chipsResumo(a.resumo)}</td><td>${a.decisao ? (a.decisao === 'seguir' ? '<span class="badge sev-ok">Seguir</span>' : '<span class="badge sev-bloqueante">Não seguir</span>') : '<span class="mut sm">pendente</span>'}</td><td>${a.pdf_path ? `<button class="bt3" data-pdf="${esc(a.pdf_path)}">baixar</button>` : '<span class="mut sm">—</span>'}</td></tr>`).join('')}</tbody></table></div>` : '<div class="empty">Nenhuma análise ainda.</div>'}</div>
       <div class="card"><h2>Documentos enviados</h2>${docs.length ? `<table class="tb"><thead><tr><th>Tipo</th><th>Arquivo</th><th>Enviado por</th><th>Data</th><th></th></tr></thead><tbody>${docs.map(d => `<tr><td>${esc(TIPOS[d.tipo] || d.tipo)}</td><td>${esc(d.arquivo_nome)}</td><td>${esc(nomeUsuario(d.enviado_por))}</td><td>${dataHora(d.enviado_em)}</td><td>${d.storage_path ? `<button class="bt3" data-doc="${esc(d.storage_path)}" data-nome="${esc(d.arquivo_nome)}">baixar</button>` : ''}</td></tr>`).join('')}</tbody></table>` : '<div class="empty">Nenhum documento.</div>'}</div>
       ${als.length ? `<div class="card"><h2>Histórico de alertas</h2><table class="tb"><thead><tr><th>Data</th><th>Código interno</th><th>Mudança</th><th>Status</th></tr></thead><tbody>${als.map(a => `<tr><td>${dataHora(a.criado_em)}</td><td class="mono">${esc(a.codigo_interno)}</td><td>${esc(ncmTexto(a.mensagem))}</td><td>${a.status === 'aberto' ? '<span class="badge sev-alerta">aberto</span>' : `<span class="badge sev-ok">resolvido</span><div class="sm mut">${esc(nomeUsuario(a.resolvido_por))} · ${esc(a.nota || '')}</div>`}</td></tr>`).join('')}</tbody></table></div>` : ''}`;
     $('#bNova').onclick = () => { location.hash = 'nova-' + p.id; };
+    const rean = async fases => {
+      const m = modal({ titulo: 'Reanalisando', corpo: '<p class="sm" id="rePr">Preparando…</p>', botoes: [] });
+      try {
+        let an = null;
+        for (const fz of fases) an = await reanalisar(p, fz, t => { const e = $('#rePr', m.el); if (e && t) e.textContent = `${FASES[fz]}: ${t}`; });
+        m.fechar(); toast(fases.length > 1 ? 'As duas fases foram reanalisadas.' : 'Reanálise concluída.'); contadores();
+        location.hash = fases.length > 1 ? 'p-' + p.id + '-' + Date.now() : 'a-' + an.id;
+      } catch (e) { m.fechar(); toast(erroMsg(e), true); }
+    };
+    const bT = $('#bReTodas'); if (bT) bT.onclick = () => rean(['pre_alerta', 'pre_registro']);
+    const bX = $('#bExcl');
+    if (bX) bX.onclick = () => modal({
+      titulo: 'Excluir processo', corpo: `<p>Isto apaga o processo <b>IP ${esc(p.ref_cliente)}</b>, com ${anals.length} análise(s), ${docs.length} documento(s), ocorrências, alertas e PDFs. Não tem como desfazer.</p><label class="f">Para confirmar, digite a referência do cliente (${esc(p.ref_cliente)})</label><input class="in" id="xRef">`,
+      botoes: [{ txt: 'Cancelar' }, { txt: 'Excluir definitivamente', cls: 'bt er', acao: async f => {
+        if ($('#xRef', f).value.trim() !== p.ref_cliente) { toast('A referência digitada não confere.', true); return false; }
+        const arqs = docs.map(d => d.storage_path).concat(anals.map(a => a.pdf_path)).filter(Boolean);
+        for (let k = 0; k < arqs.length; k += 100) await sb.storage.from('confere').remove(arqs.slice(k, k + 100));
+        await dados(sb.from('confere_processos').delete().eq('id', p.id));
+        toast('Processo excluído.'); contadores(); location.hash = 'painel';
+      } }]
+    });
     view().onclick = e => {
+      const rd = e.target.closest('[data-rodar]'); if (rd) { location.hash = 'nova-' + p.id + '~' + rd.dataset.rodar; return; }
+      const ra = e.target.closest('[data-rean]'); if (ra) return rean([ra.dataset.rean]);
       const pdf = e.target.closest('[data-pdf]'); if (pdf) { e.stopPropagation(); return baixarArquivo(pdf.dataset.pdf, pdf.dataset.pdf.split('/').pop()); }
       const d = e.target.closest('[data-doc]'); if (d) return baixarArquivo(d.dataset.doc, d.dataset.nome);
       const tr = e.target.closest('tr[data-a]'); if (tr) location.hash = 'a-' + tr.dataset.a;
@@ -464,11 +490,12 @@
     atualizar();
   }
 
-  async function vNova(procId) {
+  async function vNova(arg) {
+    const [procId, faseQ] = String(arg || '').split('~');
     const procs = await dados(sb.from('confere_processos').select('id,ref_cliente,ref_agil,invoice,status').eq('importador_id', IMP.id).order('atualizado_em', { ascending: false }).limit(500));
     await carregarCatalogo();
     await carregarRegras();
-    const S = { proc: procId || '', fase: 'pre_alerta', slots: {}, anteriores: {} };
+    const S = { proc: procId || '', fase: faseQ === 'pre_registro' ? 'pre_registro' : 'pre_alerta', slots: {}, anteriores: {} };
     view().innerHTML = `<div class="top"><div><div class="eb">Nova análise</div><h1 class="tt">Conferência <span>documental</span></h1><div class="sub">Envie os documentos, rode a análise e trate as ocorrências. Sem tolerância: qualquer divergência vira ocorrência.</div></div></div>
       <div class="card"><h2><span class="n">1</span>Processo</h2><p class="cs">Escolha um processo em aberto ou crie um novo pela referência do cliente (IP).</p>
       <div class="row r3"><div><label class="f">Processo existente</label><select class="in" id="nProc"><option value="">+ Novo processo</option>${procs.map(p => `<option value="${p.id}" ${p.id === procId ? 'selected' : ''}>IP ${esc(p.ref_cliente)}${p.ref_agil ? ' · ' + esc(p.ref_agil) : ''}${p.status !== 'aberto' ? ' (' + p.status + ')' : ''}</option>`).join('')}</select></div>
@@ -543,8 +570,45 @@
     drops.addEventListener('redesenhar', () => desenharSlots());
     drops.addEventListener('click', e => { const l = e.target.closest('[data-limpa]'); if (l) { delete S.slots[l.dataset.limpa]; desenharSlots(); } const r = e.target.closest('[data-rev]'); if (r) { const x = S.slots[r.dataset.rev]; if (x) telaConferencia(r.dataset.rev, x, desenharSlots); } });
     $('#bRodar').onclick = () => rodar(S, procs);
-    if (procId) { S.proc = procId; const an = await dados(sb.from('confere_analises').select('fase').eq('processo_id', procId).order('criado_em', { ascending: false }).limit(1)); if (an[0] && an[0].fase === 'pre_alerta') S.fase = 'pre_registro'; marcarFase(); }
+    if (procId) { S.proc = procId; if (faseQ === 'pre_alerta' || faseQ === 'pre_registro') S.fase = faseQ; else { const an = await dados(sb.from('confere_analises').select('fase').eq('processo_id', procId).order('criado_em', { ascending: false }).limit(1)); if (an[0] && an[0].fase === 'pre_alerta') S.fase = 'pre_registro'; } marcarFase(); }
     await carregarAnteriores();
+  }
+
+  // roda as regras e grava análise, itens e ocorrências (usado por "Rodar análise" e por "Reanalisar")
+  async function gravarAnalise(proc, fase, docs, usados, passo) {
+    passo('Conferindo documentos…');
+    await carregarRegras();
+    const desl = (REGRAS_DB || []).filter(r => !r.ativa).map(r => r.codigo);
+    const resultado = C.analisar({ fase, processo: { refCliente: proc.ref_cliente, refAgil: proc.ref_agil, cnpj: IMP.cnpj }, docs, catalogo: CAT || null, regrasDesligadas: desl, severidades: Object.fromEntries((REGRAS_DB || []).map(r => [r.codigo, r.severidade])) });
+      passo('Gravando a análise…');
+      const [an] = await dados(sb.from('confere_analises').insert({ processo_id: proc.id, fase: fase, catalogo_versao_id: CAT ? CAT.meta.versaoId : null, documentos: usados, resultado, resumo: resultado.resumo }).select('id,numero'));
+      const itens = resultado.itens.filter(o => !o.codigo.startsWith('#')).map(o => {
+        const q = CAT ? K.consultarCatalogo(CAT, o.codigo) : null;
+        const ciCat = q && q.produto ? (q.produto.codigosInterno.find(c => U.normCod(c) === U.normCod(o.codigo)) || o.codigo) : o.codigo;
+        return { analise_id: an.id, processo_id: proc.id, codigo_interno: ciCat, ncm_documento: (o.txt && o.txt.ncms && o.txt.ncms[0]) || (o.invoice && o.invoice.ncms && o.invoice.ncms[0]) || null, ncm_catalogo: q && q.produto ? q.produto.ncm : null, produto_codigo: q && q.produto ? q.produto.codigo : null, produto_versao: q && q.produto ? q.produto.versao : null, produto_assinatura: q ? q.ativos.map(p => p.assinatura).sort().join(';') : null, status: o.status };
+      });
+      const unicos = [...new Map(itens.map(x => [U.normCod(x.codigo_interno), x])).values()];
+      for (let k = 0; k < unicos.length; k += 500) await dados(sb.from('confere_analise_itens').insert(unicos.slice(k, k + 500)));
+      const ocs = resultado.achados.map(a => ({ analise_id: an.id, processo_id: proc.id, chave: a.chave, regra: a.regra, titulo: a.titulo, severidade: a.severidade, documento: a.documento, campo: a.campo, item: a.item, encontrado: a.encontrado == null ? null : String(a.encontrado), esperado: a.esperado == null ? null : String(a.esperado), mensagem: a.mensagem, sugestao: a.sugestao, texto_pdf: a.sugestao, base_legal: a.base, interna: !!a.interna, incluir_pdf: !!a.incluirPdf, acao: null, acao_documento: a.acaoDocumento || null }));
+      for (let k = 0; k < ocs.length; k += 500) await dados(sb.from('confere_ocorrencias').insert(ocs.slice(k, k + 500)));
+      const inv = docs.invoice;
+      if (inv) await dados(sb.from('confere_processos').update({ invoice: inv.cab.numero || null, exportador: inv.cab.exportador ? inv.cab.exportador.nome : null, atualizado_em: new Date().toISOString() }).eq('id', proc.id));
+    return an;
+  }
+  async function reanalisar(proc, fase, passo) {
+    await carregarCatalogo();
+    if (!CAT) throw new Error('Carregue o catálogo de produtos antes de reanalisar.');
+    const [ult] = await dados(sb.from('confere_analises').select('id,documentos').eq('processo_id', proc.id).eq('fase', fase).order('criado_em', { ascending: false }).limit(1));
+    if (!ult) throw new Error(`Ainda não há análise de ${FASES[fase]} neste processo: use "Rodar" e envie os documentos.`);
+    const ids = (ult.documentos || []).map(d => d.id);
+    const ds = ids.length ? await dados(sb.from('confere_documentos').select('id,tipo,arquivo_nome,arquivo_hash,extraido').in('id', ids)) : [];
+    const docs = {}, usados = [];
+    ds.forEach(d => {
+      const e = d.extraido || {};
+      ['invoice', 'packing', 'bl', 'txt', 'diferimento'].forEach(k => { if (e[k] && !docs[k]) docs[k] = e[k]; });
+      usados.push({ id: d.id, tipo: d.tipo, arquivo_nome: d.arquivo_nome, hash: d.arquivo_hash, reaproveitado: true });
+    });
+    return gravarAnalise(proc, fase, docs, usados, passo);
   }
 
   async function rodar(S, procs) {
@@ -597,10 +661,6 @@
         const ex = await dados(sb.from('confere_processos').select('id,ref_cliente,ref_agil,invoice,status').eq('importador_id', IMP.id).ilike('ref_cliente', refCliente));
         proc = ex[0] || (await dados(sb.from('confere_processos').insert({ importador_id: IMP.id, ref_cliente: refCliente, ref_agil: $('#nRa').value.trim() || null }).select()))[0];
       }
-      // regras
-      const desl = (REGRAS_DB || []).filter(r => !r.ativa).map(r => r.codigo);
-      passo('Conferindo documentos…');
-      const resultado = C.analisar({ fase: S.fase, processo: { refCliente: proc.ref_cliente, refAgil: proc.ref_agil, cnpj: IMP.cnpj }, docs, catalogo: CAT || null, regrasDesligadas: desl, severidades: Object.fromEntries((REGRAS_DB || []).map(r => [r.codigo, r.severidade])) });
       // arquivos novos
       const novos = Object.entries(S.slots).filter(([, x]) => x && !x.erro && x.file);
       let i = 0;
@@ -613,19 +673,7 @@
         const [d] = await dados(sb.from('confere_documentos').insert({ processo_id: proc.id, tipo: x.tipo === 'erro' ? 'outro' : x.tipo, arquivo_nome: x.nome, arquivo_hash: x.hash, tamanho: x.file.size, storage_path: caminho, extraido }).select('id,tipo,arquivo_nome,arquivo_hash'));
         usados.push({ id: d.id, tipo: d.tipo, arquivo_nome: d.arquivo_nome, hash: d.arquivo_hash });
       }
-      passo('Gravando a análise…');
-      const [an] = await dados(sb.from('confere_analises').insert({ processo_id: proc.id, fase: S.fase, catalogo_versao_id: CAT ? CAT.meta.versaoId : null, documentos: usados, resultado, resumo: resultado.resumo }).select('id,numero'));
-      const itens = resultado.itens.filter(o => !o.codigo.startsWith('#')).map(o => {
-        const q = CAT ? K.consultarCatalogo(CAT, o.codigo) : null;
-        const ciCat = q && q.produto ? (q.produto.codigosInterno.find(c => U.normCod(c) === U.normCod(o.codigo)) || o.codigo) : o.codigo;
-        return { analise_id: an.id, processo_id: proc.id, codigo_interno: ciCat, ncm_documento: (o.txt && o.txt.ncms && o.txt.ncms[0]) || (o.invoice && o.invoice.ncms && o.invoice.ncms[0]) || null, ncm_catalogo: q && q.produto ? q.produto.ncm : null, produto_codigo: q && q.produto ? q.produto.codigo : null, produto_versao: q && q.produto ? q.produto.versao : null, produto_assinatura: q ? q.ativos.map(p => p.assinatura).sort().join(';') : null, status: o.status };
-      });
-      const unicos = [...new Map(itens.map(x => [U.normCod(x.codigo_interno), x])).values()];
-      for (let k = 0; k < unicos.length; k += 500) await dados(sb.from('confere_analise_itens').insert(unicos.slice(k, k + 500)));
-      const ocs = resultado.achados.map(a => ({ analise_id: an.id, processo_id: proc.id, chave: a.chave, regra: a.regra, titulo: a.titulo, severidade: a.severidade, documento: a.documento, campo: a.campo, item: a.item, encontrado: a.encontrado == null ? null : String(a.encontrado), esperado: a.esperado == null ? null : String(a.esperado), mensagem: a.mensagem, sugestao: a.sugestao, texto_pdf: a.sugestao, base_legal: a.base, interna: !!a.interna, incluir_pdf: !!a.incluirPdf, acao: null, acao_documento: a.acaoDocumento || null }));
-      for (let k = 0; k < ocs.length; k += 500) await dados(sb.from('confere_ocorrencias').insert(ocs.slice(k, k + 500)));
-      const inv = docs.invoice;
-      if (inv) await dados(sb.from('confere_processos').update({ invoice: inv.cab.numero || null, exportador: inv.cab.exportador ? inv.cab.exportador.nome : null, atualizado_em: new Date().toISOString() }).eq('id', proc.id));
+      const an = await gravarAnalise(proc, S.fase, docs, usados, passo);
       passo('');
       location.hash = 'a-' + an.id + '-nova';
       contadores();
@@ -879,24 +927,34 @@
     ]);
     const anals = await dados(sb.from('confere_analises').select('id,numero,fase').order('criado_em', { ascending: false }).limit(3000));
     const P = new Map(procs.map(p => [p.id, p])), A = new Map(anals.map(a => [a.id, a]));
-    const f = { st: 'aberta', sev: 'pend', doc: '', q: '' };
+    const f = { st: 'aberta', sev: 'pend', doc: '', q: '', proc: '' };
     view().innerHTML = `<div class="top"><div><div class="eb">Tratamento</div><h1 class="tt">Ocorrências <span>em aberto</span></h1><div class="sub">Para cada divergência: escolha a ação (Ajuste Cliente, Ajuste Catálogo, Ajuste Documento ou Ciente e OK) e registre se o processo segue ou não.</div></div></div>
       <div class="card"><div class="acts"><input class="in" id="oQ" placeholder="Buscar processo, item ou texto" style="max-width:280px">
       <select class="in" id="oSt" style="max-width:170px"><option value="aberta">Sem decisão</option><option value="tratada">Tratadas</option><option value="">Todas</option></select>
       <select class="in" id="oSev" style="max-width:200px"><option value="pend">Bloqueantes e alertas</option><option value="bloqueante">Só bloqueantes</option><option value="alerta">Só alertas</option><option value="info">Informativos</option><option value="">Todas</option></select>
+      <select class="in" id="oProc" style="max-width:220px"><option value="">Todos os processos</option>${procs.filter(p => p.status === 'aberto').map(p => `<option value="${p.id}">IP ${esc(p.ref_cliente)}${p.ref_agil ? ' · ' + esc(p.ref_agil) : ''}</option>`).join('')}</select>
       <select class="in" id="oDoc" style="max-width:200px"><option value="">Todos os documentos</option>${R.SECOES.map(([k, t]) => `<option value="${k}">${esc(t)}</option>`).join('')}</select></div></div><div id="oLista"></div>`;
     const desenhar = () => {
       const q = U.norm(f.q);
-      const l = ocs.filter(o => (!f.st || o.status === f.st) && (f.sev === '' || (f.sev === 'pend' ? o.severidade !== 'info' : o.severidade === f.sev)) && (!f.doc || o.documento === f.doc) && (!q || U.norm([o.mensagem, o.item, (P.get(o.processo_id) || {}).ref_cliente, (P.get(o.processo_id) || {}).ref_agil].join(' ')).includes(q)));
+      const l = ocs.filter(o => (!f.st || o.status === f.st) && (f.sev === '' || (f.sev === 'pend' ? o.severidade !== 'info' : o.severidade === f.sev)) && (!f.doc || o.documento === f.doc) && (!f.proc || o.processo_id === f.proc) && (!q || U.norm([o.mensagem, o.item, (P.get(o.processo_id) || {}).ref_cliente, (P.get(o.processo_id) || {}).ref_agil].join(' ')).includes(q)));
       const porProc = new Map();
       l.forEach(o => { if (!porProc.has(o.processo_id)) porProc.set(o.processo_id, []); porProc.get(o.processo_id).push(o); });
-      $('#oLista').innerHTML = porProc.size ? [...porProc.entries()].map(([pid, g]) => { const p = P.get(pid) || {}; return `<div class="grp-doc" style="cursor:pointer" data-p="${pid}">IP ${esc(p.ref_cliente || '?')} ${esc(p.ref_agil || '')} <span class="badge sev-info">${g.length}</span></div>` + g.slice(0, 200).map(o => { const an = A.get(o.analise_id); return cartaoOcorrencia(o, an ? `<a class="sm" href="#a-${an.id}">análise nº ${an.numero} · ${FASES[an.fase]}</a>` : ''); }).join(''); }).join('') : '<div class="card empty">Nenhuma ocorrência com estes filtros.</div>';
+      $('#oLista').innerHTML = porProc.size ? [...porProc.entries()].map(([pid, g]) => {
+        const p = P.get(pid) || {};
+        const cnt = sv => g.filter(o => o.severidade === sv).length;
+        const porAn = new Map(); g.forEach(o => { if (!porAn.has(o.analise_id)) porAn.set(o.analise_id, []); porAn.get(o.analise_id).push(o); });
+        const aberto = !fechados.has(pid);
+        return `<div class="card" style="padding:0;overflow:hidden"><div class="acts" style="padding:14px 18px;cursor:pointer;justify-content:space-between" data-tg="${pid}"><div><b style="font-size:15px;color:var(--navy)">IP ${esc(p.ref_cliente || '?')}</b> <span class="mut">${esc(p.ref_agil || '')}</span> <span class="chips">${cnt('bloqueante') ? `<span class="badge sev-bloqueante">${cnt('bloqueante')} bloq.</span>` : ''}${cnt('alerta') ? `<span class="badge sev-alerta">${cnt('alerta')} alertas</span>` : ''}${cnt('info') ? `<span class="badge sev-info">${cnt('info')} info</span>` : ''}</span></div><div class="acts"><button class="bt2" data-p="${pid}">Abrir processo</button><span class="mut">${aberto ? '▲' : '▼'}</span></div></div>
+          ${aberto ? [...porAn.entries()].map(([aid, l]) => { const an = A.get(aid); return `<div style="padding:0 18px 12px"><div class="grp-doc">${an ? `<a href="#a-${an.id}">Análise nº ${an.numero} · ${FASES[an.fase]}</a>` : 'Análise'} <span class="badge sev-info">${l.length}</span></div>${R.SECOES.map(([k, t]) => { const d = l.filter(o => o.documento === k); return d.length ? `<div class="sm b" style="margin:8px 0 4px;color:var(--mut)">${esc(t)}</div>` + d.slice(0, 150).map(o => cartaoOcorrencia(o)).join('') : ''; }).join('')}</div>`; }).join('') : ''}</div>`;
+      }).join('') : '<div class="card empty">Nenhuma ocorrência com estes filtros.</div>';
     };
     $('#oQ').oninput = e => { f.q = e.target.value; desenhar(); };
     $('#oSt').onchange = e => { f.st = e.target.value; desenhar(); };
     $('#oSev').onchange = e => { f.sev = e.target.value; desenhar(); };
     $('#oDoc').onchange = e => { f.doc = e.target.value; desenhar(); };
-    $('#oLista').addEventListener('click', e => { const g = e.target.closest('[data-p]'); if (g) location.hash = 'p-' + g.dataset.p; });
+    $('#oProc').onchange = e => { f.proc = e.target.value; if (f.proc) fechados.delete(f.proc); desenhar(); };
+    const fechados = new Set();
+    $('#oLista').addEventListener('click', e => { const g = e.target.closest('[data-p]'); if (g) { e.stopPropagation(); location.hash = 'p-' + g.dataset.p; return; } const t = e.target.closest('[data-tg]'); if (t && !e.target.closest('[data-oc]')) { fechados.has(t.dataset.tg) ? fechados.delete(t.dataset.tg) : fechados.add(t.dataset.tg); desenhar(); } });
     ligarControles($('#oLista'), ocs, () => {});
     desenhar();
   }

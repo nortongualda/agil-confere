@@ -513,7 +513,7 @@
 
   /* ============================== BL / HBL ============================== */
   const BL_ROT = [
-    ['shipper', /^(SHIPPER|EXPORTER|EMBARCADOR)\b/],
+    ['shipper', /^(SHIPPER|EXPORTER|EMBARCADOR)(?!['’`]?S\b)\b/],
     ['consignee', /^(CONSIGNEE|CONSIGNATARIO)\b/],
     ['notify', /^(NOTIFY(\s*PARTY)?|NOTIFICAR)\b/],
     ['localRecebimento', /^PLACE\s+OF\s+RECEIPT/],
@@ -522,12 +522,12 @@
     ['destinoFinal', /^(FINAL\s+DESTINATION|PLACE\s+OF\s+DELIVERY)/],
     ['transbordo', /^PORT\s+OF\s+TRANSHIPMENT/],
     ['navio', /^(OCEAN\s+)?VESSEL/],
-    ['numero', /^(BILL\s+OF\s+LADING\s+NO|B\/L\s+NO|BL\s+NO|HBL\s+NO|HOUSE\s+B\/L)/],
+    ['numero', /^(BILL\s+OF\s+LADING\s+NO|B\/L\s+(NO|NUMBER)|BL\s+(NO|NUMBER)|HBL\s+NO|HOUSE\s+B\/L)/],
     ['paisOrigem', /^COUNTRY\s+OF\s+ORIGIN/],
     ['refEmbarcador', /^SHIPPER'?S\s+REF/],
     ['agente', /^(F\/AGENT|FORWARDING\s+AGENT|DELIVERY\s+AGENT)/]
   ];
-  const ehRotuloBL = t => BL_ROT.some(([, re]) => re.test(norm(String(t).split(/\r?\n/)[0]))) || /^(MARKS|NO\.?\s*OF\s*PKGS|DESCRIPTION\s+OF|GROSS\s+WEIGHT|MEASUREMENT|CARRIER|NO\.?\s*OF\s*BILLS)/.test(norm(t));
+  const ehRotuloBL = t => BL_ROT.some(([, re]) => re.test(norm(String(t).split(/\r?\n/)[0]).replace(/^\d{1,2}[A-Z]?\s*[.)]\s*/, ''))) || /^(MARKS|NO\.?\s*OF\s*PKGS|DESCRIPTION\s+OF|GROSS\s+WEIGHT|MEASUREMENT|CARRIER|NO\.?\s*OF\s*BILLS)/.test(norm(t));
   function lerBL(abas) {
     const aba = abas.find(a => tituloAba(a.linhas, a) === 'bl') || abas[0];
     const L = aba.linhas;
@@ -536,9 +536,9 @@
       const t = cel(L[r][c]);
       if (!t.trim()) continue;
       const ls = t.split(/\r?\n/);
-      const prim = norm(ls[0].replace(/[:：]\s*$/, ''));
+      const prim = norm(ls[0].replace(/[:：]\s*$/, '')).replace(/^\d{1,2}[A-Z]?\s*[.,)]\s*/, '');
       for (const [k, re] of BL_ROT) {
-        if (cab[k] !== undefined || !re.test(prim)) continue;
+        if (cab[k] !== undefined || !re.test(prim) || ls[0].trim().length > 60 || /^[a-z]/.test(ls[0].trim())) continue;
         const inl = /^[^:：]{2,40}[:：]\s*(\S.*)$/.exec(ls[0]);
         let v = (inl ? [inl[1]] : []).concat(ls.slice(1)).join('\n').trim();
         if (!v) {
@@ -596,7 +596,8 @@
     const inc = /INCOTERMS?\s*(?:20\d\d)?\s*[:：]?\s*([A-Z]{3})\b/.exec(ND); cab.incoterm = inc ? inc[1] : null;
     const fm = /FREIGHT\s+(PREPAID|COLLECT)/.exec(ND); cab.freteModalidade = fm ? fm[1] : null;
     const ft = /(\d+)\s*DAYS?\s*FREE\s*TIME/.exec(ND); cab.freeTime = ft ? +ft[1] : null;
-    const cont = /\b([A-Z]{4}\s?\d{7})\b/.exec(ND); cab.container = cont ? cont[1].replace(/\s/g, '') : null;
+    const tudo = norm(L.map(r => (r || []).map(cel).join(' ')).join(' '));
+    const cont = /\b([A-Z]{3}U\s?\d{7})\b/.exec(ND) || /\b([A-Z]{3}U\s?\d{7})\b/.exec(tudo); cab.container = cont ? cont[1].replace(/\s/g, '') : null;
     const lac = /SEAL\s*(?:NO\.?)?\s*[:：]\s*([A-Z0-9\-]{4,})/.exec(ND); cab.lacre = lac ? lac[1] : null;
     if (cab.volumesTexto) {
       const m = /(\d[\d.,]*)\s*([A-Za-z][A-Za-z ]*)?/.exec(cab.volumesTexto);

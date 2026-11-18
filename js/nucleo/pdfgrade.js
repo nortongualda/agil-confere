@@ -137,7 +137,7 @@
         const ka = classifica(ta), kb = classifica(tb);
         if (ka && kb && ka !== kb) { const gap = b[0].x0 - a[a.length - 1].x1; if (!melhor || gap > melhor.gap) melhor = { a, b, ta, tb, gap }; }
       }
-      if (!melhor || classifica(c.t) && melhor.gap < 0.2 * (c.toks[0].y1 - c.toks[0].y0)) { out.push(c); return; }
+      if (!melhor || classifica(c.t) && melhor.gap < 0.45 * (c.toks[0].y1 - c.toks[0].y0)) { out.push(c); return; }
       const mk = (ts, t) => ({ t, x0: ts[0].x0, x1: ts[ts.length - 1].x1, toks: ts, conf: ts.reduce((m, x) => minConf(m, x.conf), null) });
       out.push(...separarTitulos([mk(melhor.a, melhor.ta)]), ...separarTitulos([mk(melhor.b, melhor.tb)]));
     });
@@ -201,7 +201,7 @@
         if (chaves.has('qtd') && (chaves.has('descricao') || chaves.has('codigo'))) tipo = 'itens';
         else if (textos.some(t => /^MARKS/.test(t)) && textos.some(t => /GROSS\s*(WEIGHT|WT)|PESO\s*BRUTO/.test(t))) tipo = 'bl';
         if (!tipo) continue;
-        const pont = tipo === 'itens' ? chaves.size * 10 - n : 30 + n;
+        const pont = tipo === 'itens' ? chaves.size * 10 + n : 30 + n;
         if (!melhor || pont > melhor.pont) melhor = { i, n: n + 1, cols, tipo, pont, y0: grupo[0].y0, y1: grupo[grupo.length - 1].y1 };
       }
       if (melhor && i > melhor.i + 3) break;
@@ -319,13 +319,14 @@
       chunks[i].forEach(c => {
         if (usado.has(c) || c.consumido) return;
         let rotulo, primeira = '', ancoras = [c.x0];
+        const semNum = t => norm(t).replace(/^\d{1,2}[A-Z]?\s*[.,)]\s*/, '');
         const mc = /^([^:：]{2,48})[:：]\s*(.*)$/s.exec(c.t);
-        if (mc && RE_BLOCO.test(norm(mc[1]))) {
+        if (mc && RE_BLOCO.test(semNum(mc[1]))) {
           rotulo = mc[1].trim(); primeira = mc[2].trim();
           const k = c.toks.findIndex(t => /[:：]$/.test(t.t));
           if (primeira && k >= 0 && k + 1 < c.toks.length) ancoras.push(c.toks[k + 1].x0);
         } else {
-          const n = norm(c.t), m = RE_BLOCO.exec(n);
+          const n = semNum(c.t), m = RE_BLOCO.exec(n);
           if (!m || n.slice(m[0].length).replace(/^\s*(\([^)]*\)|[\/&][A-Z .]+)\s*$/, '').trim()) return;
           rotulo = c.t.trim();
         }
@@ -339,15 +340,32 @@
           const lk = L[k];
           if (lk.y0 - ult.y1 > 1.25 * passo) break;
           if (temReguaH(H, ult.y1 - 0.5, lk.y0 + 0.5, c.x0, c.x0 + 80)) break;
-          const d = chunks[k].find(x => !usado.has(x) && !x.consumido && ancoras.some(a => Math.abs(x.x0 - a) <= 3.5));
+          const d = chunks[k].find(x => !usado.has(x) && !x.consumido && (ancoras.some(a => Math.abs(x.x0 - a) <= 3.5) || (!corpo.length && x.x0 > c.x0 && x.x0 - c.x0 <= 30)));
+          if (d && !corpo.length && !ancoras.some(a => Math.abs(d.x0 - a) <= 3.5)) ancoras.push(d.x0);
           if (!d) break;
           const nd = norm(d.t);
-          if (RE_BLOCO.test(nd) || (RE_CAMPO.test(nd) && /[:：]/.test(d.t)) || tituloDe(d.t)) break;
+          if (RE_BLOCO.test(nd) || /^\d{1,2}[A-Z]?\s*[.)]\s*[A-Z]/.test(nd) || (RE_CAMPO.test(nd) && /[:：]/.test(d.t)) || tituloDe(d.t)) break;
           corpo.push(d.t); usado.add(d); d.consumido = true; ult = lk;
         }
         if (corpo.length) { c.t = rotulo + '\n' + corpo.join('\n'); c.bloco = true; usado.add(c); }
       });
     });
+  }
+
+  const RE_CAIXA = /^(PORT\s+OF\s+(LOADING|DISCHARGE|TRANSHIPMENT)|PLACE\s+OF\s+(RECEIPT|DELIVERY)|FINAL\s+DESTINATION|(OCEAN\s+)?VESSEL|B\/L\s+(NO|NUMBER)|BILL\s+OF\s+LADING\s+NO|DOCUMENT\s+NUMBER|COUNTRY\s+OF\s+ORIGIN)\b/;
+  function juntarCaixas(L, chunks) {
+    L.forEach((l, i) => chunks[i].forEach(c => {
+      if (c.consumido || c.bloco) return;
+      const n = norm(c.t).replace(/^\d{1,2}[A-Z]?\s*[.,)]\s*/, '').replace(/[:：]\s*$/, '');
+      if (!RE_CAIXA.test(n) || n.length > 45) return;
+      let d = null;
+      for (let k = i + 1; k <= i + 2 && k < L.length && !d; k++) {
+        if (L[k].y0 - l.y1 > 2.8 * Math.max(l.h, L[k].h)) break;
+        d = chunks[k].find(x => !x.consumido && x.x0 >= c.x0 - 4 && x.x0 <= c.x0 + 40 && /[A-Za-z0-9]{3}/.test(x.t) && !RE_CAIXA.test(norm(x.t).replace(/^\d{1,2}[A-Z]?\s*[.,)]\s*/, '')));
+      }
+      if (!d) return;
+      c.t = c.t.replace(/[:：]\s*$/, '') + '\n' + d.t; c.bloco = true; d.consumido = true;
+    }));
   }
 
   /* ---------- 9. números ---------- */
@@ -388,7 +406,7 @@
       let titulo = null;
       for (const l of L) {
         if (l.y0 > alt * 0.5) break;
-        for (const c of pedacos(l, pg.v)) { const t = tituloDe(c.t); if (t) { titulo = t; break; } }
+        for (const c of pedacos(l, pg.v)) { const n = norm(c.t); const t = tituloDe(c.t) || (/\bBILL\s+OF\s+LADING\b(?!\s*(NO|NUMBER))/.test(n) ? 'bl' : /\bPACKING\s+LIST\b/.test(n) && n.length < 40 ? 'packing' : /\b(COMMERCIAL\s+)?INVOICE$/.test(n) && n.length < 40 ? 'invoice' : null); if (t) { titulo = t; break; } }
         if (titulo) break;
       }
       return { pg, ip, toks, L, titulo };
@@ -479,6 +497,7 @@
       const Lr = L.filter((l, i) => !usadas.has(i));
       const chunks = Lr.map(l => pedacos(l, V));
       juntarBlocos(Lr, chunks, H);
+      juntarCaixas(Lr, chunks);
       Lr.forEach((l, k) => {
         const finais = [];
         chunks[k].filter(c => !c.consumido).forEach(c => { if (c.bloco) finais.push(c); else dividirRotulos([c]).forEach(d => finais.push(d)); });

@@ -56,9 +56,10 @@
     return { m, W, H };
   }
   // linhas de tabela: trechos escuros longos (horizontais e verticais), em pontos
-  function detectarReguas(cv, escala) {
+  function detectarReguas(cv, escala, fator) {
+    const fz = fator || 1;
     const { m, W, H } = mapaEscuro(cv, 170);
-    const minH = Math.round(24 * escala), minV = Math.round(14 * escala), folga = Math.max(1, Math.round(escala * 0.6));
+    const minH = Math.round(24 * escala * fz), minV = Math.round(14 * escala * fz), folga = Math.max(1, Math.round(escala * 0.6 * fz));
     const hs = [];
     for (let y = 0; y < H; y++) {
       const base = y * W;
@@ -93,7 +94,7 @@
       }
       return out;
     };
-    const esp = 3.5 * escala;
+    const esp = 3.5 * escala * fz;
     const H2 = [], V2 = [];
     juntar(hs, 'y', 'x0', 'x1').forEach(g => {
       const e = g.fim - g.ini + 1;
@@ -230,18 +231,26 @@
         cv.width = cv.height = 0;
       } else {
         usouOcr = true;
-        const esc = 3.5;
+        const esc = Math.min(3.5, 3600 / Math.max(vp.width, vp.height));
+        const fz = Math.max(1, Math.max(vp.width, vp.height) / 842);
         let cv = await desenhar(page, esc);
         inclinacao = estimarInclinacao(cv);
         if (Math.abs(inclinacao) >= 0.1) cv = girar(cv, inclinacao);
-        reguas = detectarReguas(cv, esc);
-        const limpo = apagarReguas(cv, reguas, esc);
+        reguas = detectarReguas(cv, esc, fz);
+        // muitas "linhas" = ruído da foto (furos, textura): não apaga nada antes do OCR
+        const limpo = reguas.h.length + reguas.v.length > 400 ? cv : apagarReguas(cv, reguas, esc);
+        if (limpo === cv) reguas = { h: [], v: [] };
         op.progresso(`Reconhecendo o texto da página ${n} de ${total} (documento escaneado)…`);
         tokens = await ocrCanvas(limpo, esc, p => op.progresso(`Reconhecendo o texto da página ${n} de ${total}: ${Math.round((p || 0) * 100)}%`));
         tokens.forEach(t => { if (t.conf != null) { somaConf += t.conf; nConf++; if (t.conf < 80) baixas++; } });
-        cv.width = cv.height = 0; limpo.width = limpo.height = 0;
+        if (limpo !== cv) { limpo.width = limpo.height = 0; } cv.width = cv.height = 0;
       }
-      paginas.push({ numero: n, largura: vp.width, altura: vp.height, tokens, h: reguas.h, v: reguas.v, ocr: precisaOcr, inclinacao });
+      const f = Math.max(vp.width, vp.height) > 1300 ? Math.max(vp.width, vp.height) / 842 : 1;
+      if (f !== 1) {
+        tokens.forEach(t => { t.x0 /= f; t.x1 /= f; t.y0 /= f; t.y1 /= f; });
+        reguas.h.forEach(r => { r.y /= f; r.x0 /= f; r.x1 /= f; }); reguas.v.forEach(r => { r.x /= f; r.y0 /= f; r.y1 /= f; });
+      }
+      paginas.push({ numero: n, largura: vp.width / f, altura: vp.height / f, tokens, h: reguas.h, v: reguas.v, ocr: precisaOcr, inclinacao });
       page.cleanup();
     }
     try { await tarefa.destroy(); } catch (e) { /* ok */ }

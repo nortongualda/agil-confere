@@ -299,7 +299,7 @@
     pre_alerta: [['invoice', 'Invoice (+ packing list)', 'PDF, imagem ou planilha do exportador. Se o packing list (ou o BL) estiver no mesmo arquivo, é lido junto.'], ['packing', 'Packing list', 'Opcional quando já vem na planilha da invoice.'], ['bl', 'Draft HBL', 'PDF, imagem ou planilha do draft.']],
     pre_registro: [['txt', 'TXT do TOTVS', 'Arquivo .txt gerado no ERP da Eletra (layout SIGAEIC).'], ['invoice', 'Invoice final', 'PDF, imagem ou planilha da invoice.'], ['relatorio', 'Relatório de itens', 'Relatório de itens do Sigraweb (.xlsx).']]
   };
-  async function lerArquivo(file, progresso) {
+  async function lerArquivo(file, progresso, alvo) {
     const buf = await file.arrayBuffer();
     const hash = await hashArquivo(buf);
     const nome = file.name;
@@ -310,6 +310,8 @@
       const base = { file, buf, hash, nome, leitura, abasPdf: L.abas };
       const rel = C.lerRelatorio(L.abas);
       if (rel.itens.length) return Object.assign(base, { tipo: 'relatorio', relatorio: rel });
+      // BL: título reconhecido, texto "BILL OF LADING" na página ou arquivo posto no quadro do BL
+      L.abas.forEach(a => { if (!a.titulo && (alvo === 'bl' || /\bBILL\s+OF\s+LADING\b/.test(U.norm(a.texto || '')))) a.titulo = 'bl'; });
       const abasBl = L.abas.filter(a => a.titulo === 'bl');
       const bl = abasBl.length ? C.lerBL(abasBl) : null;
       const com = C.lerDocumentosComerciais(L.abas.filter(a => a.titulo !== 'bl'));
@@ -482,7 +484,7 @@
       for (const f of files) {
         const prog = $('#prog'); prog.textContent = 'Lendo ' + f.name + '…';
         let x;
-        try { x = await lerArquivo(f, t => { prog.textContent = t; }); } catch (e) { x = { nome: f.name, erro: 'Falha ao ler: ' + erroMsg(e) }; }
+        try { x = await lerArquivo(f, t => { prog.textContent = t; }, alvo); } catch (e) { x = { nome: f.name, erro: 'Falha ao ler: ' + erroMsg(e) }; }
         prog.textContent = '';
         if (x.erro) { console.error('leitura', f.name, x.erro); toast(`${f.name}: ${x.erro}`, true); if (alvo) S.slots[alvo] = x; continue; }
         if (x.tipo === 'outro' && alvo) { S.slots[alvo] = Object.assign(x, { erro: 'Não reconheci este arquivo como ' + ({ invoice: 'invoice', packing: 'packing list', bl: 'BL', txt: 'TXT', relatorio: 'relatório de itens' }[alvo] || 'documento') + '. Ele não será conferido. Envie o arquivo para o suporte (Norton) analisar o layout.' }); continue; }

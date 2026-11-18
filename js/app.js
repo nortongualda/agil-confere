@@ -296,8 +296,8 @@
 
   /* ---------------- nova análise ---------------- */
   const SLOTS = {
-    pre_alerta: [['invoice', 'Invoice (+ packing list)', 'PDF, imagem ou planilha do exportador. Se o packing list (ou o BL) estiver no mesmo arquivo, é lido junto.'], ['packing', 'Packing list', 'Opcional quando já vem na planilha da invoice.'], ['bl', 'Draft HBL', 'PDF, imagem ou planilha do draft.'], ['diferimento', 'Planilha de diferimento de ICMS', 'Opcional. Planilha de validação do diferimento (.xlsx).']],
-    pre_registro: [['txt', 'TXT do TOTVS', 'Arquivo .txt gerado no ERP da Eletra (layout SIGAEIC).'], ['invoice', 'Invoice final', 'PDF, imagem ou planilha da invoice.'], ['relatorio', 'Relatório de itens', 'Relatório de itens do Sigraweb (.xlsx).'], ['diferimento', 'Planilha de diferimento de ICMS', 'Opcional. Planilha de validação do diferimento (.xlsx).']]
+    pre_alerta: [['invoice', 'Invoice', 'PDF (com texto ou escaneado), imagem ou planilha. Se o packing list (ou o BL) vier no mesmo arquivo ou em outra aba, é lido junto.'], ['packing', 'Packing list', 'Envie aqui se vier em arquivo separado.'], ['bl', 'BL (draft ou original)', 'PDF, imagem ou planilha.']],
+    pre_registro: [['txt', 'TXT do TOTVS', 'Arquivo .txt gerado no ERP da Eletra (layout SIGAEIC).'], ['invoice', 'Invoice final', 'PDF, imagem ou planilha. Packing list no mesmo arquivo é lido junto.'], ['packing', 'Packing list final', 'Envie aqui se vier em arquivo separado.'], ['diferimento', 'Validação do diferimento de ICMS', 'Planilha de validação do diferimento (.xlsx).']]
   };
   async function lerArquivo(file, progresso, alvo) {
     const buf = await file.arrayBuffer();
@@ -474,8 +474,8 @@
       <div class="row r3"><div><label class="f">Processo existente</label><select class="in" id="nProc"><option value="">+ Novo processo</option>${procs.map(p => `<option value="${p.id}" ${p.id === procId ? 'selected' : ''}>IP ${esc(p.ref_cliente)}${p.ref_agil ? ' · ' + esc(p.ref_agil) : ''}${p.status !== 'aberto' ? ' (' + p.status + ')' : ''}</option>`).join('')}</select></div>
       <div class="novo"><label class="f">Ref. cliente (IP) *</label><input class="in" id="nRc" placeholder="026B/2026"></div><div class="novo"><label class="f">Ref. Ágil</label><input class="in" id="nRa" placeholder="AGIM4407-26"></div></div></div>
       <div class="card"><h2><span class="n">2</span>Fase</h2><div class="fase">
-      <label class="on"><input type="radio" name="fase" value="pre_alerta" checked><b>Pré-alerta (fase 1)</b><small>Invoice, packing list e draft do HBL antes do embarque: exigências do Regulamento Aduaneiro, conferência entre documentos e situação de cada item no catálogo.</small></label>
-      <label><input type="radio" name="fase" value="pre_registro"><b>Pré-registro (fase 3)</b><small>TXT do TOTVS, invoice final e relatório de itens: conciliação item a item (NCM, quantidades, valores, pesos, descrições) contra o catálogo vigente.</small></label></div></div>
+      <label class="on"><input type="radio" name="fase" value="pre_alerta" checked><b>Pré-alerta (fase 1)</b><small>Invoice, packing list e BL recebidos do cliente: exigências do Regulamento Aduaneiro, conferência entre os documentos e situação de cada item no catálogo.</small></label>
+      <label><input type="radio" name="fase" value="pre_registro"><b>Pré-registro (fase 3)</b><small>TXT do TOTVS, invoice e/ou packing list finais e validação do diferimento de ICMS: conciliação item a item (NCM, quantidades, valores, pesos, descrições) contra o catálogo vigente.</small></label></div></div>
       <div class="card"><h2><span class="n">3</span>Documentos</h2><p class="cs">Arraste os arquivos em qualquer quadro; o sistema reconhece o tipo pelo conteúdo.</p><div class="drops" id="drops"></div>
       <div class="prog" id="catInfo"></div></div>
       <div class="acts"><button class="bt" id="bRodar">Rodar análise</button><span class="prog" id="prog"></span></div>`;
@@ -500,10 +500,10 @@
         if (x.erro) { console.error('leitura', f.name, x.erro); toast(`${f.name}: ${x.erro}`, true); if (alvo) S.slots[alvo] = x; continue; }
         if (x.tipo === 'outro' && alvo) { S.slots[alvo] = Object.assign(x, { erro: 'Não reconheci este arquivo como ' + ({ invoice: 'invoice', packing: 'packing list', bl: 'BL', txt: 'TXT', relatorio: 'relatório de itens' }[alvo] || 'documento') + '. Ele não será conferido. Envie o arquivo para o suporte (Norton) analisar o layout.' }); continue; }
         if (x.tipo === 'txt') { if (S.fase !== 'pre_registro') { S.fase = 'pre_registro'; marcarFase(); } S.slots.txt = x; }
-        else if (x.tipo === 'relatorio') { if (S.fase !== 'pre_registro') { S.fase = 'pre_registro'; marcarFase(); } S.slots.relatorio = x; }
+        else if (x.tipo === 'relatorio') { toast(`${x.nome}: relatório de itens não faz parte da conferência; arquivo ignorado.`, true); continue; }
         else if (x.tipo === 'bl') S.slots.bl = x;
-        else if (x.tipo === 'diferimento') S.slots.diferimento = x;
-        else if (x.tipo === 'invoice_packing' || x.tipo === 'invoice') { S.slots.invoice = x; if (x.packing && S.fase === 'pre_alerta') delete S.slots.packing; if (x.blJunto && S.fase === 'pre_alerta') S.slots.bl = { nome: x.nome + ' (BL no mesmo PDF)', tipo: 'bl', bl: x.blJunto, deArquivo: 'invoice' }; }
+        else if (x.tipo === 'diferimento') { if (S.fase !== 'pre_registro') { S.fase = 'pre_registro'; marcarFase(); } S.slots.diferimento = x; }
+        else if (x.tipo === 'invoice_packing' || x.tipo === 'invoice') { S.slots.invoice = x; if (x.packing) delete S.slots.packing; if (x.blJunto && S.fase === 'pre_alerta') S.slots.bl = { nome: x.nome + ' (BL no mesmo PDF)', tipo: 'bl', bl: x.blJunto, deArquivo: 'invoice' }; }
         else if (x.tipo === 'packing') S.slots.packing = x;
         else if (x.tipo === 'outro') { S.slots['outro_' + x.hash.slice(0, 6)] = x; toast(x.aviso); }
         if (!$('#nProc').value && !$('#nRc').value) {
@@ -562,7 +562,7 @@
       for (const [k] of SLOTS[S.fase]) {
         const x = S.slots[k];
         if (x && !x.erro) {
-          if (k === 'invoice') { if (x.invoice) docs.invoice = x.invoice; if (x.packing && S.fase === 'pre_alerta' && !S.slots.packing) docs.packing = x.packing; }
+          if (k === 'invoice') { if (x.invoice) docs.invoice = x.invoice; if (x.packing && !S.slots.packing) docs.packing = x.packing; }
           else if (k === 'packing') { if (x.packing) docs.packing = x.packing; }
           else if (k === 'bl') docs.bl = x.bl;
           else if (k === 'txt') docs.txt = x.txt;
@@ -573,7 +573,7 @@
           if (d && d.extraido) {
             const e = d.extraido;
             if (k === 'invoice' && !docs.invoice) docs.invoice = e.invoice || null;
-            if (k === 'packing' && !docs.packing && S.fase === 'pre_alerta') docs.packing = e.packing || null;
+            if (k === 'packing' && !docs.packing) docs.packing = e.packing || null;
             if (k === 'bl' && !docs.bl) docs.bl = e.bl || null;
             if (k === 'txt' && !docs.txt) docs.txt = e.txt || null;
             if (k === 'relatorio' && !docs.relatorio) docs.relatorio = e.relatorio || null;

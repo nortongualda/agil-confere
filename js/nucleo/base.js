@@ -316,7 +316,7 @@
   function parteBloco(texto) {
     if (!texto) return null;
     const ls = String(texto).split(/\r?\n/).map(s => s.trim()).filter(Boolean);
-    const cnpj = /(\d{2}\.?\d{3}\.?\d{3}\/?\d{4}-?\d{2})/.exec(texto);
+    const cnpj = /(\d{2}[.,]?\d{3}[.,]?\d{3}\/?\d{4}-?\d{2})/.exec(texto);
     return { nome: ls[0] || '', endereco: ls.slice(1).filter(l => !/CNPJ/i.test(l)).join(', '), cnpj: cnpj ? cnpj[1].replace(/\D/g, '') : null, texto: ls.join('\n'), linhas: ls.length };
   }
   const COLS = [
@@ -391,8 +391,12 @@
       const qtd = num(g('qtd'));
       const desc = cel(g('descricao')).trim(), cod = cel(g('codigo')).trim();
       if (qtd == null || (!desc && !cod)) continue;
+      // PDF/OCR: número do item colado na NCM ("63 85332120")
+      let ncmTxt = cel(g('ncm')).trim(), seq = num(g('seq'));
+      const mNcm = /(?:^|\s)(\d{4}\.?\d{2}\.?\d{2})$/.exec(ncmTxt);
+      if (mNcm && ncmLimpa(ncmTxt).length > 8) { const pre = ncmTxt.slice(0, mNcm.index).trim(); if (seq == null && /^\d{1,4}$/.test(pre)) seq = +pre; ncmTxt = mNcm[1]; }
       itens.push({
-        linha: r + 1, seq: num(g('seq')), ncm: ncmLimpa(g('ncm')), codigo: cod, descricao: desc,
+        linha: r + 1, seq, ncm: ncmLimpa(ncmTxt), codigo: cod, descricao: desc,
         fabricante: cel(g('fabricante')).trim(), fabEndereco: cel(g('fabEndereco')).trim(), fabPais: cel(g('fabPais')).trim(),
         qtd, unidade: cel(g('unidade')).trim(), preco: num(g('preco')), pesoLiq: num(g('pesoLiq')), pesoBruto: num(g('pesoBruto')),
         total: num(g('total')), po: cel(g('po')).trim()
@@ -811,7 +815,7 @@
   const STOP = new Set('DE DA DO DAS DOS E COM PARA EM A O AS OS NA NO NAS NOS POR OU UM UMA UNS UMAS AO AOS SEM SOB SOBRE THE OF AND FOR WITH TO IN ON BY OR AN AT AS IS ATE AINDA QUE SE TIPO'.split(' '));
   const radical = w => w.length > 5 ? w.replace(/(OES|AES|IS|ES|OS|AS|S)$/, '').replace(/(O|A|E)$/, '') : w;
   function palavras(t) {
-    return norm(t).replace(/[^A-Z0-9+\-./ ]/g, ' ').split(/\s+/).map(w => w.replace(/^[\-./]+|[\-./]+$/g, '')).filter(w => w.length >= 2 && !STOP.has(w)).map(radical);
+    return norm(String(t == null ? '' : t).replace(/\uFFFD/g, '')).replace(/[^A-Z0-9+\-./ ]/g, ' ').split(/\s+/).map(w => w.replace(/^[\-./]+|[\-./]+$/g, '')).filter(w => w.length >= 2 && !STOP.has(w)).map(radical);
   }
   function similaridade(a, b) {
     const A = new Set(palavras(a)), B = new Set(palavras(b));
@@ -873,6 +877,7 @@
   function contemToken(tok, alvo) {
     const A = compacta(alvo);
     if (A.includes(tok.chave)) return true;
+    if (/\d/.test(tok.chave) && A.replace(/O/g, '0').includes(tok.chave.replace(/O/g, '0'))) return true;
     if (tok.tipo === 'tecnologia') return A.includes(tok.chave.replace(/-/g, '')) || A.replace(/-/g, '').includes(tok.chave.replace(/-/g, ''));
     return false;
   }

@@ -5,3 +5,6 @@ insert into public.confere_regras (codigo, titulo, documento, severidade, base_l
  ('DIF-01', 'Item validado na planilha de diferimento de ICMS', 'diferimento', 'alerta', 'Controle interno (diferimento de ICMS)', array['pre_alerta','pre_registro'], true, true),
  ('DIF-02', 'Diferimento e finalidade do item', 'diferimento', 'info', 'Controle interno (diferimento de ICMS)', array['pre_alerta','pre_registro'], true, true)
 on conflict (codigo) do nothing;
+insert into public.confere_regras (codigo, titulo, documento, severidade, base_legal, fases, interna, ativa) values
+ ('TXT-14', 'Descrição do TXT sem caracteres corrompidos', 'txt', 'bloqueante', 'Descrição da mercadoria (DUIMP)', array['pre_registro'], false, true)
+on conflict (codigo) do nothing;

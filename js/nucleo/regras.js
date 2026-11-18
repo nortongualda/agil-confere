@@ -80,8 +80,9 @@
     ['ITM-09', 'Descrição do relatório de itens x catálogo vigente', 'relatorio', 'alerta', 'Controle interno', [F3]],
     ['ITM-10', 'País de origem do item', 'txt', 'alerta', 'Conferência entre documentos', [F3]],
     ['ITM-11', 'Fabricante do item', 'txt', 'alerta', 'Conferência entre documentos', [F3]],
-    ['DIF-01', 'Item validado na planilha de diferimento de ICMS', 'diferimento', 'alerta', 'Controle interno (diferimento de ICMS)', AMBAS],
-    ['DIF-02', 'Diferimento e finalidade do item', 'diferimento', 'info', 'Controle interno (diferimento de ICMS)', AMBAS],
+    ['TXT-14', 'Descrição do TXT sem caracteres corrompidos', 'txt', 'bloqueante', 'Descrição da mercadoria (DUIMP)', [F3]],
+    ['DIF-01', 'Item validado na planilha de diferimento de ICMS', 'diferimento', 'alerta', 'Controle interno (diferimento de ICMS)', [F3]],
+    ['DIF-02', 'Diferimento e finalidade do item', 'diferimento', 'info', 'Controle interno (diferimento de ICMS)', [F3]],
     ['CAT-01', 'Produto cadastrado no catálogo', 'catalogo', 'bloqueante', 'Catálogo de Produtos (Portal Único)', AMBAS],
     ['CAT-02', 'Produto ativo no catálogo', 'catalogo', 'bloqueante', 'Catálogo de Produtos (Portal Único)', AMBAS],
     ['CAT-03', 'Um único produto ativo por código interno', 'catalogo', 'alerta', 'Catálogo de Produtos (Portal Único)', AMBAS],
@@ -96,7 +97,8 @@
   const soma = (l, k) => l.reduce((s, x) => s + (x[k] == null ? 0 : x[k]), 0);
   const digitos = s => String(s == null ? '' : s).replace(/\D/g, '');
   const fmtCnpj = s => { const d = digitos(s); return d.length === 14 ? `${d.slice(0, 2)}.${d.slice(2, 5)}.${d.slice(5, 8)}/${d.slice(8, 12)}-${d.slice(12)}` : (s || '—'); };
-  const refContem = (a, b) => { const x = alnum(a), y = alnum(b); return !!x && !!y && (x.includes(y) || y.includes(x)); };
+  // compara referências tolerando "O" lido no lugar de zero (OCR)
+  const refContem = (a, b) => { const z = v => alnum(v).replace(/O/g, '0'), x = z(a), y = z(b); return !!x && !!y && (x.includes(y) || y.includes(x)); };
   function mesmoNome(a, b) {
     if (!a || !b) return false;
     const s = D.similaridade(a, b);
@@ -129,6 +131,8 @@
       }
     };
   }
+  // "código" que é número + unidade ou pedaço de palavra (1PCT, 15MMNCIA, 2.2NF) não é modelo: medidas já são conferidas pela unidade
+  const tokRelevante = t => !(t.tipo === 'codigo' && (/^\d+([.,]\d+)?[A-Z]{1,8}$/.test(t.chave) || t.valor.length < 4));
   const refItem = i => i.codigo || (i.seq != null ? `nº ${i.seq}` : `linha ${i.linha}`);
 
   /* ---------------- processo ---------------- */
@@ -231,9 +235,11 @@
       if (p.data && c.data && p.data !== c.data) A.add('PKL-01', { severidade: 'info', campo: 'Data', encontrado: U.fmtData(p.data), esperado: U.fmtData(c.data), mensagem: 'Data do packing list difere da invoice.', acao: 'ciente_ok' });
       const porSeq = new Map(inv.itens.map((i, k) => [i.seq != null ? i.seq : k + 1, i]));
       const vistos = new Set();
+      // mesma quantidade de itens: pareia pela ordem (o número do item pode faltar na leitura de PDF escaneado)
+      const pelaOrdem = pkl.itens.length === inv.itens.length;
       pkl.itens.forEach((pi, k) => {
-        const sq = pi.seq != null ? pi.seq : k + 1;
-        const i = porSeq.get(sq);
+        const sq = pelaOrdem ? (inv.itens[k].seq != null ? inv.itens[k].seq : k + 1) : pi.seq != null ? pi.seq : k + 1;
+        const i = pelaOrdem ? inv.itens[k] : porSeq.get(sq);
         if (!i) { A.add('PKL-02', { severidade: 'bloqueante', item: `nº ${sq}`, campo: 'Item', encontrado: 'só no packing list', mensagem: `Item nº ${sq} do packing list não existe na invoice.`, sugestao: `Item nº ${sq} consta no packing list e não na invoice.` }); return; }
         vistos.add(sq);
         const r = refItem(i);
@@ -309,7 +315,7 @@
     if (c.freteValor == null) A.add('BL-10', { campo: 'Valor do frete', encontrado: c.freteTexto || 'não informado', esperado: 'valor e moeda', mensagem: 'BL não informa o valor e a moeda do frete.', sugestao: 'Informar valor do frete e a moeda do frete.' });
     if (c.incoterm && inc && c.incoterm !== inc) A.add('BL-11', { campo: 'Incoterm', encontrado: c.incoterm, esperado: inc, mensagem: `Incoterm do BL (${c.incoterm}) difere da invoice (${inc}).`, sugestao: `Ajustar o incoterm no BL para ${inc}.` });
     if (!c.container) A.add('BL-12', { campo: 'Container', encontrado: 'não informado', mensagem: 'Número do container não informado no BL.', sugestao: 'Informar número do container.' });
-    if (c.ipRef && r0 && r0.ipRef && alnum(c.ipRef) !== alnum(r0.ipRef)) A.add('BL-14', { campo: 'Referência IP', encontrado: c.ipRef, esperado: r0.ipRef, mensagem: 'Referência IP do BL difere da invoice.', sugestao: `Ajustar a referência no BL para ${r0.ipRef}.` });
+    if (c.ipRef && r0 && r0.ipRef && !refContem(c.ipRef, r0.ipRef)) A.add('BL-14', { campo: 'Referência IP', encontrado: c.ipRef, esperado: r0.ipRef, mensagem: 'Referência IP do BL difere da invoice.', sugestao: `Ajustar a referência no BL para ${r0.ipRef}.` });
     if (c.pos && c.pos.length && r0 && r0.poRef) { const a = new Set(c.pos.map(p => p.replace(/^0+/, ''))), b = pos(r0.poRef); if (fmtSet(a) !== fmtSet(b)) A.add('BL-14', { campo: 'Pedidos (PO)', encontrado: fmtSet(a), esperado: fmtSet(b), mensagem: 'Pedidos (PO) do BL diferem da invoice.', sugestao: 'Ajustar a relação de pedidos (PO) no BL conforme invoice.' }); }
     if (!c.madeira) A.add('BL-15', { campo: 'Embalagem de madeira', encontrado: 'não declarada', mensagem: 'BL não declara a condição da embalagem de madeira.', sugestao: 'Declarar no BL a condição da embalagem de madeira (tratada/marcada, processada ou sem madeira).' });
     else if (pkl && pkl.cab.madeira && norm(pkl.cab.madeira) !== norm(c.madeira)) A.add('BL-15', { campo: 'Embalagem de madeira', encontrado: c.madeira, esperado: pkl.cab.madeira, mensagem: 'Declaração de embalagem de madeira diferente entre BL e packing list.', sugestao: 'Uniformizar a declaração de embalagem de madeira entre BL e packing list.' });
@@ -322,6 +328,9 @@
     if (!txt) return;
     (txt.avisos || []).forEach(av => A.add('TXT-01', { campo: 'Estrutura', encontrado: av, mensagem: av, sugestao: `Gerar novamente o TXT no TOTVS: ${av}`, acaoDocumento: 'TXT' }));
     if (!tp) return;
+    // caracteres perdidos na geração do TXT ("el�trico"): a descrição iria assim para a DUIMP
+    const corrompidos = [...new Set(tp.itens.filter(i => /\uFFFD/.test(i.descricao || '')).map(i => i.codigo))];
+    if (corrompidos.length) A.add('TXT-14', { campo: 'Descrição (caracteres)', encontrado: `${corrompidos.length} item(ns) com "�" no lugar de letras acentuadas`, esperado: 'acentos preservados (é, ç, ã...)', mensagem: `O TXT veio com caracteres corrompidos ("�") na descrição de ${corrompidos.length} item(ns), por exemplo ${corrompidos.slice(0, 5).join(', ')}. A descrição iria assim para a DUIMP.`, sugestao: `Gentileza gerar novamente o TXT no TOTVS com a codificação correta: ${corrompidos.length} item(ns) estão com caracteres corrompidos ("�") no lugar de letras acentuadas.` });
     const cnpjProc = digitos(proc.cnpj);
     if (cnpjProc && txt.itdi && txt.itdi.cnpj && txt.itdi.cnpj !== cnpjProc) A.add('TXT-02', { campo: 'CNPJ (ITDI)', encontrado: fmtCnpj(txt.itdi.cnpj), esperado: fmtCnpj(cnpjProc), mensagem: 'CNPJ do TXT difere do importador do processo.', sugestao: `CNPJ informado no TXT (${fmtCnpj(txt.itdi.cnpj)}) difere do importador (${fmtCnpj(cnpjProc)}).` });
     const refs = [tp.capi && tp.capi.refCliente, tp.capi && tp.capi.processo].filter(Boolean);
@@ -339,7 +348,9 @@
       }
       const ms = [...new Set(tp.itens.map(i => i.moeda).filter(Boolean))];
       if (inv.cab.moeda && ms.length && ms.some(m => moedaISO(m) !== inv.cab.moeda)) A.add('TXT-04', { campo: 'Moeda (ITEB)', encontrado: ms.map(m => `${m} (${moedaISO(m) || '?'})`).join(', '), esperado: `${inv.cab.moeda} (${(U.MOEDAS[inv.cab.moeda] || {}).cod || '?'})`, mensagem: 'Moeda do TXT difere da invoice.', sugestao: `Ajustar a moeda no TXT para ${inv.cab.moeda}, conforme invoice.` });
-      const pO = paisCodigo(inv.cab.paisOrigem), pA = paisCodigo(inv.cab.paisAquisicao), pP = paisCodigo(inv.cab.paisProcedencia);
+      // invoice com vários países de origem no cabeçalho: a origem é conferida item a item (ITM-10)
+      const variosPaises = t => (String(t || '').split(/[,;\/.]+|\s+E\s+|\s+AND\s+/i).map(v => v.trim()).filter(v => v.length > 2)).length > 1;
+      const pO = variosPaises(inv.cab.paisOrigem) ? null : paisCodigo(inv.cab.paisOrigem), pA = variosPaises(inv.cab.paisAquisicao) ? null : paisCodigo(inv.cab.paisAquisicao), pP = paisCodigo(inv.cab.paisProcedencia);
       const os = [...new Set(tp.itens.map(i => i.paisOrigem).filter(Boolean))], as = [...new Set(tp.itens.map(i => i.paisAquisicao).filter(Boolean))];
       if (pO && os.some(o => o !== pO)) A.add('TXT-05', { campo: 'País de origem (ITEA)', encontrado: os.map(o => `${o} ${paisNome(o)}`).join(', '), esperado: `${pO} ${paisNome(pO)}`, mensagem: 'País de origem do TXT difere da invoice.', sugestao: 'Ajustar o país de origem no TXT conforme invoice.' });
       if (pA && as.some(o => o !== pA)) A.add('TXT-05', { campo: 'País de aquisição (ITEA)', encontrado: as.map(o => `${o} ${paisNome(o)}`).join(', '), esperado: `${pA} ${paisNome(pA)}`, mensagem: 'País de aquisição do TXT difere da invoice.', sugestao: 'Ajustar o país de aquisição no TXT conforme invoice.' });
@@ -459,9 +470,9 @@
             o.comparacaoFatura = { similaridade: cmp.similaridade, contencao: cmp.contencao, faltamNoCatalogo: cmp.faltamEmB, faltamNaFatura: cmp.faltamEmA, soFatura: cmp.soA, soCatalogo: cmp.soB };
             if (cmp.similaridade < 0.25 && cmp.contencao < 0.5) add('CAT-07', { campo: 'Descrição', encontrado: `semelhança ${Math.round(cmp.similaridade * 100)}%`, esperado: 'mesmo produto do catálogo', mensagem: `Descrição do item ${ref} na invoice não corresponde ao produto ${q.produto.codigo} do catálogo (semelhança ${Math.round(cmp.similaridade * 100)}%).`, sugestao: `A descrição do item ${ref} na invoice não corresponde ao produto cadastrado no Catálogo de Produtos. Gentileza confirmar qual é a mercadoria embarcada e ajustar a descrição.`, acao: 'ajuste_cliente' });
             else {
-              const sens = cmp.faltamEmB.filter(t => !/^codigo$/.test(t.tipo) || t.valor.length >= 4);
+              const sens = cmp.faltamEmB.filter(tokRelevante);
               if (sens.length) add('CAT-06', { campo: 'Informações da fatura', encontrado: sens.map(t => `${D.NOMES_TIPO[t.tipo]}: ${t.valor}`).join('; '), esperado: 'também no catálogo', mensagem: `Informações da invoice ausentes no catálogo para ${ref}: ${sens.map(t => t.valor).join(', ')}.`, sugestao: `Avaliar a inclusão no catálogo das informações da invoice para o item ${ref}: ${sens.map(t => `${D.NOMES_TIPO[t.tipo]} ${t.valor}`).join('; ')}.`, acao: 'ajuste_catalogo' });
-              const inc = cmp.faltamEmA.filter(t => !(t.tipo === 'codigo' && normCod(t.valor) === normCod(cod)));
+              const inc = cmp.faltamEmA.filter(t => tokRelevante(t) && !(t.tipo === 'codigo' && normCod(t.valor) === normCod(cod)));
               if (inc.length) add('CAT-08', { campo: 'Descrição', encontrado: 'incompleta', esperado: inc.map(t => `${D.NOMES_TIPO[t.tipo]}: ${t.valor}`).join('; '), mensagem: `Descrição do item ${ref} na invoice não traz informações do catálogo: ${inc.map(t => t.valor).join(', ')}.`, sugestao: `Gentileza complementar a descrição do item ${ref} na invoice com: ${inc.map(t => `${D.NOMES_TIPO[t.tipo]} ${t.valor}`).join('; ')}.` });
             }
           }
@@ -538,7 +549,7 @@
           if (!(parecido(cTC) && invForaDoCatalogo)) add('ITM-08', { severidade: 'bloqueante', campo: 'Descrição', encontrado: `semelhança com a invoice ${Math.round(cTI.similaridade * 100)}%`, esperado: 'mesma mercadoria da invoice', mensagem: `Descrição do item ${ref} no TXT não corresponde à invoice (semelhança ${Math.round(cTI.similaridade * 100)}%).`, sugestao: `Notar que a descrição do item ${ref} no TXT não corresponde à descrição da invoice. Gentileza verificar.` });
         } else if (cTC && !parecido(cTC)) add('ITM-08', { campo: 'Descrição', encontrado: `semelhança com o catálogo ${Math.round(cTC.similaridade * 100)}%`, esperado: 'produto do catálogo', mensagem: `Descrição do item ${ref} no TXT não corresponde ao catálogo.`, sugestao: `Notar que a descrição do item ${ref} no TXT difere do produto cadastrado no catálogo.` });
         else if (cTI) {
-          const sens = cTI.faltamEmA.filter(t => t.tipo !== 'codigo' || t.valor.length >= 4);
+          const sens = cTI.faltamEmA.filter(tokRelevante);
           if (sens.length) add('ITM-08', { campo: 'Descrição', encontrado: 'TXT sem: ' + sens.map(t => t.valor).join(', '), esperado: 'informações da invoice', mensagem: `Descrição do item ${ref} no TXT não traz informações da invoice: ${sens.map(t => t.valor).join(', ')}.`, sugestao: `Notar que a descrição do item ${ref} no TXT não traz: ${sens.map(t => `${D.NOMES_TIPO[t.tipo]} ${t.valor}`).join('; ')}.` });
         }
       }

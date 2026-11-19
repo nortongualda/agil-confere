@@ -484,7 +484,7 @@
     });
     if (tp) agregar(tp.itens, i => normCod(i.codigo)).forEach(l => {
       const o = pega(l[0].codigo);
-      o.txt = { linhas: l, seqs: l.map(i => i.seq), ncms: [...new Set(l.map(i => i.ncm).filter(Boolean))], qtd: soma(l, 'qtd'), precos: [...new Set(l.map(i => arred(i.precoUnit, 6)).filter(v => v != null))], valor: soma(l, 'valor'), pesoLiq: soma(l, 'pesoLiq'), unidades: [...new Set(l.map(i => i.unidade).filter(Boolean))], pos: [...new Set(l.map(i => i.po).filter(Boolean))], descricoes: [...new Set(l.map(i => i.descricao))], descricao: l[0].descricao, origens: [...new Set(l.map(i => i.paisOrigem).filter(Boolean))], exs: l.map(i => i.exNcm), fabricantes: [...new Set(l.map(i => i.codFabricante).filter(Boolean))], aliqII: l[0].aliqII };
+      o.txt = { linhas: l, seqs: l.map(i => i.seq), ncms: [...new Set(l.map(i => i.ncm).filter(Boolean))], qtd: soma(l, 'qtd'), precos: [...new Set(l.map(i => arred(i.precoUnit, 6)).filter(v => v != null))], valor: soma(l, 'valor'), pesoLiq: soma(l, 'pesoLiq'), unidades: [...new Set(l.map(i => i.unidade).filter(Boolean))], pos: [...new Set(l.map(i => i.po).filter(Boolean))], descricoes: [...new Set(l.map(i => i.descricao))], descricao: l[0].descricao, origens: [...new Set(l.map(i => i.paisOrigem).filter(Boolean))], exs: l.map(i => i.exNcm), moedas: [...new Set(l.map(i => moedaISO(i.moeda) || i.moeda).filter(Boolean))], fabricantes: [...new Set(l.map(i => i.codFabricante).filter(Boolean))], aliqII: l[0].aliqII };
     });
     if (rel) agregar(rel.itens, i => normCod(i.codigo)).forEach(l => {
       const o = pega(l[0].codigo);

@@ -289,15 +289,20 @@
       // conferência: itens que não fecham na conta são relidos uma vez
       const susp = IA.suspeitos(okIA, op.nome);
       if (susp.size) {
-        op.progresso(`Relendo ${[...susp.values()].reduce((a, x) => a + x.length, 0)} item(ns) que não fecharam na conta…`);
-        await IA.emParalelo([...susp.entries()].map(([pg, seqs]) => async () => {
+        const nItens = [...susp.values()].reduce((a, x) => a + x.seqs.length + x.faltam.length, 0);
+        op.progresso(`Relendo ${susp.size} página(s) com ${nItens} item(ns) a conferir…`);
+        await IA.emParalelo([...susp.entries()].map(([pg, sx]) => async () => {
           const alvo = okIA.find(r => r.numero === pg), img = filaIA.find(p => p.numero === pg);
+          if (!alvo || !img) return;
           try {
-            const r = await IA.lerPagina(img.imagem, { arquivo: op.nome, pagina: pg, etapa: 'releitura', dica: `RELEITURA. Transcreva SOMENTE os itens de número ${seqs.join(', ')} desta página, conferindo dígito por dígito quantidade, preço unitário, valor total e pesos. Copie o que está impresso, mesmo que a conta do documento não feche.` });
+            const r = await IA.lerPagina(img.imagem, { arquivo: op.nome, pagina: pg, etapa: 'releitura', dica: IA.dicaReleitura(sx) });
             custo += r.custo || 0;
             relidos += IA.aplicarReleitura(alvo, r.pagina);
           } catch (e) { /* mantém a primeira leitura */ }
         }), 4);
+        const resto = IA.suspeitos(okIA, op.nome);
+        const faltando = [...resto.values()].reduce((a, x) => a + x.faltam.length, 0);
+        if (faltando) avisos.push(`Mesmo após a releitura, ${faltando} item(ns) da numeração não foram encontrados no documento. Confira no PDF se o documento pula essa numeração.`);
       }
       abasIA = okIA.length ? IA.montarAbas(okIA, op.nome) : [];
       paginasIA = okIA.length;
@@ -339,9 +344,9 @@
         const pg = [{ numero: 1, dados: r.pagina }];
         const susp = IA.suspeitos(pg, op.nome);
         if (susp.size) {
-          op.progresso('Relendo itens que não fecharam na conta…');
+          op.progresso('Relendo itens a conferir…');
           try {
-            const rr = await IA.lerPagina(imagem, { arquivo: op.nome, pagina: 1, etapa: 'releitura', dica: `RELEITURA. Transcreva SOMENTE os itens de número ${susp.get(1).join(', ')}, conferindo dígito por dígito quantidade, preço unitário, valor total e pesos. Copie o que está impresso, mesmo que a conta do documento não feche.` });
+            const rr = await IA.lerPagina(imagem, { arquivo: op.nome, pagina: 1, etapa: 'releitura', dica: IA.dicaReleitura(susp.get(1)) });
             custo += rr.custo || 0; relidos = IA.aplicarReleitura(pg[0], rr.pagina);
           } catch (e) { /* mantém a primeira leitura */ }
         }

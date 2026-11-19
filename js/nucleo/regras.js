@@ -24,6 +24,9 @@
   const POP = 'Procedimento Operacional Padrão utilizado para Análise de Processos de Importação';
   // limites para diferenças de total (o TXT manda; abaixo disso é arredondamento)
   const LIM = { valor: 1.00, peso: 1.0, qtd: 0.00001, volumes: 0 };
+  // limite de US$ 1,00 convertido para a moeda da invoice (taxas de referência aproximadas; servem só como tolerância de arredondamento)
+  const USD_POR = { USD: 1, EUR: 1.08, GBP: 1.27, CHF: 1.13, CNY: 0.14, JPY: 0.0067, BRL: 0.18 };
+  const limValor = moeda => Math.round((LIM.valor / (USD_POR[moeda] || 1)) * 100) / 100;
 
   const REGRAS = [
     ['PRO-01', 'Referência do cliente igual nos documentos', 'processo', 'alerta', POP, AMBAS],
@@ -209,10 +212,11 @@
     const semPreco = inv.itens.filter(i => i.preco == null || i.total == null);
     if (semPreco.length) A.add('INV-09', { campo: 'Preço / total', encontrado: `${semPreco.length} item(ns) sem preço ou total`, mensagem: `Itens sem preço unitário ou valor total: ${semPreco.slice(0, 10).map(refItem).join(', ')}.`, sugestao: `Informar preço unitário e valor total dos itens ${semPreco.slice(0, 10).map(refItem).join(', ')}${semPreco.length > 10 ? '…' : ''}.` });
     // quantidade × preço ≠ total da linha: arredondamento do exportador só vira ocorrência acima do limite
-    const contas = inv.itens.filter(i => i.preco != null && i.total != null && Math.abs(i.qtd * i.preco - i.total) > LIM.valor);
-    if (contas.length) A.add('INV-09', { campo: 'Valor total do item', encontrado: `${contas.length} item(ns) com diferença acima de ${dinheiro(c.moeda, LIM.valor)}`, esperado: 'quantidade × preço unitário', mensagem: `Quantidade × preço unitário não confere com o valor total em ${contas.length} item(ns): ${contas.slice(0, 6).map(i => `${refItem(i)} (${fmt(i.qtd * i.preco)} × ${fmt(i.total)})`).join('; ')}${contas.length > 6 ? '…' : ''}.`, sugestao: `Conferir o valor total dos itens ${contas.slice(0, 10).map(refItem).join(', ')}${contas.length > 10 ? '…' : ''}: quantidade × preço unitário difere do valor informado em mais de ${dinheiro(c.moeda, LIM.valor)}.` });
+    const lv = limValor(c.moeda);
+    const contas = inv.itens.filter(i => i.preco != null && i.total != null && Math.abs(i.qtd * i.preco - i.total) > lv);
+    if (contas.length) A.add('INV-09', { campo: 'Valor total do item', encontrado: `${contas.length} item(ns) com diferença acima de ${dinheiro(c.moeda, lv)}`, esperado: 'quantidade × preço unitário', mensagem: `Quantidade × preço unitário não confere com o valor total em ${contas.length} item(ns): ${contas.slice(0, 6).map(i => `${refItem(i)} (${fmt(i.qtd * i.preco)} × ${fmt(i.total)})`).join('; ')}${contas.length > 6 ? '…' : ''}.`, sugestao: `Conferir o valor total dos itens ${contas.slice(0, 10).map(refItem).join(', ')}${contas.length > 10 ? '…' : ''}: quantidade × preço unitário difere do valor informado em mais de ${dinheiro(c.moeda, lv)}${c.moeda && c.moeda !== 'USD' ? ' (equivalente a US$ 1,00)' : ''}.` });
     const somaTot = soma(inv.itens, 'total');
-    if (T.total != null && Math.abs(T.total - somaTot) > LIM.valor) A.add('INV-14', { campo: 'Valor total', encontrado: dinheiro(c.moeda, T.total), esperado: `${dinheiro(c.moeda, somaTot)} (soma dos itens)`, mensagem: `Valor total da fatura (${dinheiro(c.moeda, T.total)}) difere da soma dos itens (${dinheiro(c.moeda, somaTot)}).`, sugestao: `Conferir o valor total da invoice: ${dinheiro(c.moeda, T.total)}; a soma dos itens é ${dinheiro(c.moeda, somaTot)}.` });
+    if (T.total != null && Math.abs(T.total - somaTot) > lv) A.add('INV-14', { campo: 'Valor total', encontrado: dinheiro(c.moeda, T.total), esperado: `${dinheiro(c.moeda, somaTot)} (soma dos itens)`, mensagem: `Valor total da fatura (${dinheiro(c.moeda, T.total)}) difere da soma dos itens (${dinheiro(c.moeda, somaTot)}).`, sugestao: `Conferir o valor total da invoice: ${dinheiro(c.moeda, T.total)}; a soma dos itens é ${dinheiro(c.moeda, somaTot)}.` });
     if (T.qtd != null && !iguais(T.qtd, soma(inv.itens, 'qtd'), 5)) A.add('INV-14', { campo: 'Quantidade total', encontrado: fmtAuto(T.qtd), esperado: `${fmtAuto(soma(inv.itens, 'qtd'))} (soma dos itens)`, mensagem: 'Quantidade total difere da soma dos itens.', sugestao: `Conferir a quantidade total da invoice: ${fmtAuto(T.qtd)}; a soma dos itens é ${fmtAuto(soma(inv.itens, 'qtd'))}.` });
     if (!c.moeda) A.add('INV-11', { campo: 'Moeda', encontrado: 'não identificada', mensagem: 'Moeda da fatura não identificada.', sugestao: 'Indicar a moeda da negociação na invoice.' });
     if (!c.pagamento) A.add('INV-11', { campo: 'Condições de pagamento', encontrado: 'não informadas', mensagem: 'Condição de pagamento não localizada na fatura.', sugestao: 'Informar as condições de pagamento na invoice.' });
@@ -367,7 +371,7 @@
       const c2 = tp.cap2 || {};
       const fTxt = (c2.fretePrepaid || 0) + (c2.freteCollect || 0), mTxt = moedaISO(c2.moedaFrete);
       const fInv = inv.cab.frete && inv.cab.frete.valor;
-      if (fInv && fTxt && Math.abs(fInv - fTxt) > LIM.valor) A.add('TXT-07', { severidade: 'bloqueante', campo: 'Frete (CAP2)', encontrado: dinheiro(mTxt, fTxt), esperado: dinheiro(inv.cab.moeda, fInv), mensagem: 'Frete do TXT difere do frete destacado na invoice.', sugestao: `Ajustar o frete no TXT (${dinheiro(mTxt, fTxt)}) conforme invoice (${dinheiro(inv.cab.moeda, fInv)}).` });
+      if (fInv && fTxt && Math.abs(fInv - fTxt) > limValor(inv.cab.moeda)) A.add('TXT-07', { severidade: 'bloqueante', campo: 'Frete (CAP2)', encontrado: dinheiro(mTxt, fTxt), esperado: dinheiro(inv.cab.moeda, fInv), mensagem: 'Frete do TXT difere do frete destacado na invoice.', sugestao: `Ajustar o frete no TXT (${dinheiro(mTxt, fTxt)}) conforme invoice (${dinheiro(inv.cab.moeda, fInv)}).` });
       if (!fTxt && inv.cab.incoterm && INCOTERM_COM_FRETE.includes(inv.cab.incoterm)) A.add('TXT-07', { campo: 'Frete (CAP2)', encontrado: 'não informado', mensagem: `TXT sem valor de frete com incoterm ${inv.cab.incoterm}.`, sugestao: 'Informar o valor do frete no TXT.' });
       if (fTxt && mTxt && inv.cab.moeda && mTxt !== inv.cab.moeda) A.add('TXT-07', { severidade: 'info', campo: 'Moeda do frete', encontrado: mTxt, esperado: inv.cab.moeda, mensagem: `Frete do TXT em ${mTxt}, moeda da fatura ${inv.cab.moeda}.`, acao: 'ciente_ok' });
       if (c2.valorSeguro) {
@@ -626,7 +630,7 @@
     if (!ref) return null;
     const MED = [
       ['qtd', 'Quantidade', '', LIM.qtd, 5, v => fmtAuto(v, 5)],
-      ['valor', `Valor${moeda ? ' (' + moeda + ')' : ''}`, moeda || '', LIM.valor, 2, v => fmt(v, 2)],
+      ['valor', `Valor${moeda ? ' (' + moeda + ')' : ''}`, moeda || '', limValor(moeda), 2, v => fmt(v, 2)],
       ['pesoLiq', 'Peso líquido (kg)', 'kg', LIM.peso, tp ? 4 : 2, v => fmt(v, tp ? 4 : 2)],
       ['pesoBruto', 'Peso bruto (kg)', 'kg', LIM.peso, tp ? 4 : 2, v => fmt(v, tp ? 4 : 2)],
       ['volumes', 'Volumes', '', LIM.volumes, 0, v => fmtAuto(v, 0)]
@@ -656,7 +660,7 @@
           if (top.length) detalhe = ` Itens com maior diferença: ${top.map(o => `${o.codigo} (${o[campo] > 0 ? '+' : ''}${f(o[campo])}${u})`).join('; ')}.`;
         }
         const dir = l.base === 'txt' ? ' O TXT é a referência para o registro da DUIMP.' : '';
-        A.add('TOT-01', { documento: d === 'txt' ? 'txt' : d, campo: `Total: ${l.nome.toLowerCase()}`, encontrado: `${f(r.valor)}${u} (${nd})`, esperado: `${f(l.valorBase)}${u} (${nb})`, mensagem: `${l.nome}: ${nd} ${f(r.valor)}${u} × ${nb} ${f(l.valorBase)}${u}; diferença de ${f(Math.abs(r.dif))}${u}, acima do limite de ${l.chave === 'qtd' ? '0' : f(lim)}${u}.${detalhe}`, sugestao: `O total de ${l.nome.toLowerCase().replace(/ \(.*\)$/, '')} ${'n' + COM_ARTIGO[d]} (${f(r.valor)}${u}) difere ${l.base === 'txt' ? 'do TXT' : 'da invoice'} (${f(l.valorBase)}${u}) em ${f(Math.abs(r.dif))}${u}.${detalhe}${dir} Gentileza validar.`, acao: 'ajuste_cliente' });
+        A.add('TOT-01', { documento: d === 'txt' ? 'txt' : d, campo: `Total: ${l.nome.toLowerCase()}`, encontrado: `${f(r.valor)}${u} (${nd})`, esperado: `${f(l.valorBase)}${u} (${nb})`, mensagem: `${l.nome}: ${nd} ${f(r.valor)}${u} × ${nb} ${f(l.valorBase)}${u}; diferença de ${f(Math.abs(r.dif))}${u}, acima do limite de ${l.chave === 'qtd' ? '0' : f(lim)}${u}${l.chave === 'valor' && moeda && moeda !== 'USD' ? ' (equivalente a US$ 1,00)' : ''}.${detalhe}`, sugestao: `O total de ${l.nome.toLowerCase().replace(/ \(.*\)$/, '')} ${'n' + COM_ARTIGO[d]} (${f(r.valor)}${u}) difere ${l.base === 'txt' ? 'do TXT' : 'da invoice'} (${f(l.valorBase)}${u}) em ${f(Math.abs(r.dif))}${u}.${detalhe}${dir} Gentileza validar.`, acao: 'ajuste_cliente' });
       });
     });
     return { referencia: ref, moeda, documentos: docs, linhas };
@@ -727,6 +731,6 @@
   const baseDe = o => { const b = String((o && (o.base || o.base_legal)) || '').trim(); return !b || /^(Controle interno|Conferência)/i.test(b) ? POP : b; };
 
   REGRAS.forEach(r => { r.interna = INTERNAS.has(r.codigo) || r.documento === 'relatorio'; });
-  C.regras = { REGRAS, MAPA, DOCS, COM_ARTIGO, SECOES, ACOES, PESO_SEV, VERSAO_MOTOR, POP, LIM, analisar, montarParecer, pedidoDe, baseDe, fmtCnpj, incluirPorPadrao, fecha: (t, ult) => String(t).replace(/[;.:\s]+$/, '') + (ult ? '.' : ';') };
+  C.regras = { REGRAS, MAPA, DOCS, COM_ARTIGO, SECOES, ACOES, PESO_SEV, VERSAO_MOTOR, POP, LIM, limValor, analisar, montarParecer, pedidoDe, baseDe, fmtCnpj, incluirPorPadrao, fecha: (t, ult) => String(t).replace(/[;.:\s]+$/, '') + (ult ? '.' : ';') };
   C.analisar = analisar;
 })(typeof self !== 'undefined' ? self : this);

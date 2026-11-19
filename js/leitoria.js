@@ -101,7 +101,10 @@
       if (!pg || !pg.dados) return;
       const secoes = (pg.dados.secoes || []).filter(s => s && s.tipo);
       secoes.forEach((s, k) => {
-        const tipo = s.tipo === 'outro' && atual && s.itens && s.itens.length ? atual.tipo : s.tipo;
+        // página sem cabeçalho próprio (continuação de tabela) segue no documento atual, mesmo que a IA chute outro tipo
+        const temCabecalho = s.campos && Object.values(s.campos).some(x => x != null && v(x) !== '');
+        const continua = atual && atual.tipo !== 'bl' && s.tipo !== 'bl' && (s.continuacao || !temCabecalho);
+        const tipo = continua ? atual.tipo : s.tipo === 'outro' && atual && s.itens && s.itens.length ? atual.tipo : s.tipo;
         const novo = !atual || atual.tipo !== tipo || (!s.continuacao && tipo !== 'bl' && s.campos && s.campos.numero && atual.campos.numero && v(s.campos.numero) !== v(atual.campos.numero));
         if (novo) { atual = { tipo, campos: {}, colunas: [], itens: [], totais: {}, paginas: [], textos: [], duvidas: [] }; docs.push(atual); }
         Object.entries(s.campos || {}).forEach(([c, x]) => {
@@ -201,37 +204,64 @@
   }
 
   /* ---------- conferência: o que não fecha é relido ---------- */
+  // o que reler: contas que não fecham, valores que faltaram e itens pulados (buraco na numeração)
   function suspeitos(paginas, nome) {
-    const out = new Map(); // página -> [seq]
+    const out = new Map(); // página -> { seqs: [], completa: bool, faltam: [] }
+    const marca = (pg, seq, completa, falta) => { if (pg == null) return; if (!out.has(pg)) out.set(pg, { seqs: [], completa: false, faltam: [] }); const o = out.get(pg); if (seq != null && !o.seqs.includes(seq)) o.seqs.push(seq); if (completa) o.completa = true; if (falta != null && !o.faltam.includes(falta)) o.faltam.push(falta); };
     montarAbas(paginas, nome).filter(a => a.titulo !== 'bl').forEach(a => {
       const com = C.lerDocumentosComerciais([a]);
       const d = com.invoice || com.packing;
       if (!d) return;
+      const tem = k => d.itens.some(i => i[k] != null);
+      const exige = (d.tipo === 'invoice' ? ['qtd', 'preco', 'total'] : ['qtd']).concat(['pesoLiq', 'pesoBruto']).filter(tem);
       d.itens.forEach(i => {
-        const ruim = (i.qtd != null && i.preco != null && i.total != null && Math.abs(i.qtd * i.preco - i.total) > Math.max(0.011, Math.abs(i.total) * 0.0005)) ||
-          (i.pesoLiq != null && i.pesoBruto != null && i.pesoLiq > i.pesoBruto);
         const o = a.origem[i.linha - 1];
-        if (!ruim || !o || !o.seq) return;
-        if (!out.has(o.pagina)) out.set(o.pagina, []);
-        out.get(o.pagina).push(o.seq);
+        if (!o || !o.seq) return;
+        const ruim = (i.qtd != null && i.preco != null && i.total != null && Math.abs(i.qtd * i.preco - i.total) > Math.max(0.011, Math.abs(i.total) * 0.0005)) ||
+          (i.pesoLiq != null && i.pesoBruto != null && i.pesoLiq > i.pesoBruto) || exige.some(k => i[k] == null);
+        if (ruim) marca(o.pagina, o.seq);
       });
+      // numeração 1, 2, 3...: o que falta entre duas linhas lidas foi pulado
+      const lidos = a.origem.filter(Boolean).map(o => ({ n: Number(o.seq), pg: o.pagina })).filter(o => Number.isInteger(o.n));
+      for (let k = 1; k < lidos.length; k++) {
+        const ant = lidos[k - 1], at = lidos[k];
+        if (at.n - ant.n > 1 && at.n - ant.n < 200) for (let f = ant.n + 1; f < at.n; f++) { marca(ant.pg, null, true, f); if (at.pg !== ant.pg) marca(at.pg, null, true, f); }
+      }
     });
     return out;
   }
+  function dicaReleitura(s) {
+    if (s.completa) return `RELEITURA COMPLETA. Na primeira leitura desta página faltaram itens${s.faltam.length ? ` (números ${faixa(s.faltam)})` : ''}. Transcreva TODOS os itens da página, sem pular nenhum, conferindo dígito por dígito quantidade, preço unitário, valor total e pesos. Copie o que está impresso, mesmo que a conta do documento não feche.`;
+    return `RELEITURA. Transcreva SOMENTE os itens de número ${s.seqs.join(', ')} desta página, preenchendo todas as colunas que existem na tabela (inclusive valor total e pesos) e conferindo dígito por dígito. Copie o que está impresso, mesmo que a conta do documento não feche.`;
+  }
+  const faixa = l => { const n = l.map(Number).sort((a, b) => a - b); return n.length > 2 && n[n.length - 1] - n[0] === n.length - 1 ? `${n[0]} a ${n[n.length - 1]}` : n.join(', '); };
   // aplica a releitura: troca só os itens relidos (mesmo seq) da página
   function aplicarReleitura(pg, rel) {
     const novos = new Map();
-    ((rel && rel.secoes) || []).forEach(s => (s.itens || []).forEach(i => novos.set(v(i.seq), i)));
+    ((rel && rel.secoes) || []).forEach(s => (s.itens || []).forEach(i => { if (v(i.seq)) novos.set(v(i.seq), i); }));
     let trocas = 0;
-    (pg.dados.secoes || []).forEach(s => (s.itens || []).forEach((i, k) => {
+    const secs = (pg.dados.secoes || []).filter(s => s.tipo !== 'bl');
+    const vistos = new Set();
+    secs.forEach(s => (s.itens || []).forEach((i, k) => {
       const n = novos.get(v(i.seq));
       if (!n) return;
-      const mudou = NUMERICOS.some(c => v(n[c]) !== v(i[c]));
-      if (mudou) { s.itens[k] = Object.assign({}, i, n); trocas++; }
+      vistos.add(v(i.seq));
+      const mudou = NUMERICOS.some(c => v(n[c]) !== v(i[c]) && v(n[c]) !== '');
+      if (mudou) { s.itens[k] = Object.assign({}, i, Object.fromEntries(Object.entries(n).filter(([, x]) => x != null && v(x) !== ''))); trocas++; }
     }));
+    // itens que só a releitura trouxe: entram na ordem da numeração
+    const alvo = secs.find(s => (s.itens || []).length) || secs[0];
+    if (alvo) {
+      novos.forEach((i, sq) => {
+        if (vistos.has(sq)) return;
+        const n = Number(sq), pos = alvo.itens.findIndex(x => Number(x.seq) > n);
+        if (pos < 0) alvo.itens.push(i); else alvo.itens.splice(pos, 0, i);
+        trocas++;
+      });
+    }
     (rel.duvidas || []).forEach(d => pg.dados.duvidas.push(d));
     return trocas;
   }
 
-  window.ConfereIA = { status, disponivel, lerPagina, emParalelo, montarAbas, suspeitos, aplicarReleitura, documentos, ESTIMATIVA_PAGINA, _interno: { numerico, imagemDaPagina } };
+  window.ConfereIA = { status, disponivel, lerPagina, emParalelo, montarAbas, suspeitos, dicaReleitura, aplicarReleitura, documentos, ESTIMATIVA_PAGINA, _interno: { numerico, imagemDaPagina } };
 })();

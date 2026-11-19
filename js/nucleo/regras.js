@@ -7,21 +7,27 @@
   const C = (typeof module === 'object' && module.exports) ? Object.assign(module.exports, require('./base.js')) : raiz.Confere;
   const U = C.util, D = C.descricao, K = C.catalogo;
   const { norm, normCod, alnum, num, arred, iguais, fmt, fmtAuto, fmtNcm, ncmLimpa, moedaISO, paisCodigo, paisNome, unidadeBase, INCOTERMS, INCOTERM_COM_FRETE, INCOTERM_COM_SEGURO } = U;
-  const VERSAO_MOTOR = '1.0 (18/11/2026)';
+  const VERSAO_MOTOR = '1.1 (19/11/2026)';
 
-  const COM_ARTIGO = { diferimento: 'a planilha de diferimento', invoice: 'a invoice', packing: 'o packing list', bl: 'o BL', ce: 'o CE Mercante', txt: 'o TXT', relatorio: 'o relatório de itens', catalogo: 'o Catálogo de Produtos', processo: 'o processo' };
+  const COM_ARTIGO = { diferimento: 'a planilha de validação do diferimento', invoice: 'a invoice', packing: 'o packing list', bl: 'o BL', ce: 'o CE Mercante', txt: 'o TXT', relatorio: 'o relatório de itens', catalogo: 'o Catálogo de Produtos', processo: 'o processo' };
   const listaPt = l => l.length <= 1 ? (l[0] || '') : l.slice(0, -1).join(', ') + ' e ' + l[l.length - 1];
   const INTERNAS = new Set(['CAT-03', 'CAT-05', 'CAT-06', 'REL-01', 'REL-05', 'ITM-09', 'TXT-13', 'TXT-08', 'BL-16']);
-  const incluirPorPadrao = a => a.severidade !== 'info' && !INTERNAS.has(a.regra) && a.documento !== 'relatorio' && a.documento !== 'diferimento';
-  const DOCS = { invoice: 'Invoice', packing: 'Packing List', bl: 'HBL', ce: 'CE Mercante', txt: 'TXT (ERP)', relatorio: 'Relatório de itens', diferimento: 'Planilha de diferimento de ICMS', catalogo: 'Catálogo de Produtos', processo: 'Processo' };
-  const SECOES = [['invoice', 'INVOICE'], ['packing', 'PACKING LIST'], ['bl', 'HBL'], ['ce', 'CE MERCANTE'], ['txt', 'TXT'], ['relatorio', 'RELATÓRIO DE ITENS'], ['diferimento', 'PLANILHA DE DIFERIMENTO DE ICMS'], ['catalogo', 'CATÁLOGO DE PRODUTOS'], ['processo', 'OBSERVAÇÕES GERAIS']];
+  const incluirPorPadrao = a => a.severidade !== 'info' && !INTERNAS.has(a.regra) && a.documento !== 'relatorio';
+  const DOCS = { invoice: 'Invoice', packing: 'Packing List', bl: 'HBL', ce: 'CE Mercante', txt: 'TXT (ERP)', relatorio: 'Relatório de itens', diferimento: 'Planilha de validação do diferimento de ICMS', catalogo: 'Catálogo de Produtos', processo: 'Processo' };
+  const SECOES = [['invoice', 'INVOICE'], ['packing', 'PACKING LIST'], ['bl', 'HBL'], ['ce', 'CE MERCANTE'], ['txt', 'TXT'], ['relatorio', 'RELATÓRIO DE ITENS'], ['diferimento', 'PLANILHA DE VALIDAÇÃO DO DIFERIMENTO DE ICMS'], ['catalogo', 'CATÁLOGO DE PRODUTOS'], ['processo', 'OBSERVAÇÕES GERAIS']];
+  // o que se pede ao cliente: ajustar o documento ou validar/confirmar a informação
+  const VALIDAR = new Set(['ITM-02', 'DIF-03', 'DIF-05', 'DIF-06', 'DIF-07', 'TOT-01', 'CAT-07', 'INV-05', 'BL-03', 'BL-16', 'TXT-13', 'INV-13']);
+  const pedidoPadrao = a => (VALIDAR.has(a.regra) || a.acao === 'ciente_ok' || a.acao === 'ajuste_cliente') ? 'validar' : 'ajustar';
   const PESO_SEV = { bloqueante: 3, alerta: 2, info: 1 };
   const ACOES = { ajuste_cliente: 'Ajuste Cliente', ajuste_catalogo: 'Ajuste Catálogo', ajuste_documento: 'Ajuste Documento', ciente_ok: 'Ciente e OK' };
   const F1 = 'pre_alerta', F3 = 'pre_registro', AMBAS = [F1, F3];
+  const POP = 'Procedimento Operacional Padrão utilizado para Análise de Processos de Importação';
+  // limites para diferenças de total (o TXT manda; abaixo disso é arredondamento)
+  const LIM = { valor: 1.00, peso: 1.0, qtd: 0.00001, volumes: 0 };
 
   const REGRAS = [
-    ['PRO-01', 'Referência do cliente igual nos documentos', 'processo', 'alerta', 'Controle interno', AMBAS],
-    ['INV-01', 'Número e data da fatura', 'invoice', 'bloqueante', 'Identificação do documento', AMBAS],
+    ['PRO-01', 'Referência do cliente igual nos documentos', 'processo', 'alerta', POP, AMBAS],
+    ['INV-01', 'Número e data da fatura', 'invoice', 'bloqueante', POP, AMBAS],
     ['INV-02', 'Exportador: nome e endereço completos', 'invoice', 'bloqueante', 'RA (Dec. 6.759/2009), art. 557, I', AMBAS],
     ['INV-03', 'Importador: nome, endereço e CNPJ', 'invoice', 'bloqueante', 'RA, art. 557, II', AMBAS],
     ['INV-04', 'Especificação completa das mercadorias', 'invoice', 'bloqueante', 'RA, art. 557, III', AMBAS],
@@ -35,54 +41,59 @@
     ['INV-12', 'Incoterm coerente em toda a fatura', 'invoice', 'alerta', 'RA, art. 557, XIV', AMBAS],
     ['INV-13', 'Fatura assinada pelo exportador', 'invoice', 'info', 'RA, art. 553, II', AMBAS],
     ['INV-14', 'Totais da fatura iguais à soma dos itens', 'invoice', 'alerta', 'RA, art. 557, XI', AMBAS],
-    ['PKL-01', 'Packing list com as mesmas referências da invoice', 'packing', 'alerta', 'Conferência entre documentos', AMBAS],
-    ['PKL-02', 'Itens do packing list iguais aos da invoice', 'packing', 'alerta', 'Conferência entre documentos', AMBAS],
-    ['PKL-03', 'Totais do packing list iguais aos da invoice', 'packing', 'alerta', 'Conferência entre documentos', AMBAS],
+    ['PKL-01', 'Packing list com as mesmas referências da invoice', 'packing', 'alerta', POP, AMBAS],
+    ['PKL-02', 'Itens do packing list iguais aos da invoice', 'packing', 'alerta', POP, AMBAS],
+    ['PKL-03', 'Totais do packing list iguais aos da invoice', 'packing', 'alerta', POP, AMBAS],
     ['PKL-04', 'Volumes e cubagem informados', 'packing', 'alerta', 'RA, art. 557, V', AMBAS],
-    ['PKL-05', 'Container e lacre informados', 'packing', 'info', 'Conferência entre documentos', AMBAS],
+    ['PKL-05', 'Container e lacre informados', 'packing', 'info', POP, AMBAS],
     ['PKL-06', 'Declaração de embalagem de madeira', 'packing', 'alerta', 'IN MAPA nº 32/2015 (embalagens de madeira)', AMBAS],
-    ['BL-01', 'Embarcador igual ao exportador', 'bl', 'alerta', 'Conferência entre documentos', AMBAS],
-    ['BL-02', 'Consignatário igual ao importador (nome e CNPJ)', 'bl', 'bloqueante', 'Conferência entre documentos', AMBAS],
-    ['BL-03', 'Notify party informado', 'bl', 'info', 'Conferência entre documentos', AMBAS],
-    ['BL-04', 'Portos de embarque e descarga iguais à invoice', 'bl', 'alerta', 'Conferência entre documentos', AMBAS],
-    ['BL-05', 'Volumes iguais ao packing list', 'bl', 'alerta', 'Conferência entre documentos', AMBAS],
-    ['BL-06', 'Peso bruto igual à invoice e ao packing list', 'bl', 'alerta', 'Conferência entre documentos', AMBAS],
-    ['BL-07', 'Cubagem igual ao packing list', 'bl', 'alerta', 'Conferência entre documentos', AMBAS],
-    ['BL-08', 'Marcas iguais ao packing list', 'bl', 'info', 'Conferência entre documentos', AMBAS],
-    ['BL-09', 'NCM do BL cobre todas as posições dos itens', 'bl', 'alerta', 'Conferência entre documentos (reflete no CE Mercante)', AMBAS],
-    ['BL-10', 'Frete: valor, moeda e modalidade', 'bl', 'alerta', 'Conferência entre documentos', AMBAS],
-    ['BL-11', 'Incoterm igual à invoice', 'bl', 'alerta', 'Conferência entre documentos', AMBAS],
-    ['BL-12', 'Número do container', 'bl', 'alerta', 'Conferência entre documentos', AMBAS],
-    ['BL-13', 'Sem campos provisórios ou texto em outro idioma', 'bl', 'bloqueante', 'Conferência documental', AMBAS],
-    ['BL-14', 'Referências (IP e PO) iguais à invoice', 'bl', 'alerta', 'Conferência entre documentos', AMBAS],
+    ['BL-01', 'Embarcador igual ao exportador', 'bl', 'alerta', POP, AMBAS],
+    ['BL-02', 'Consignatário igual ao importador (nome e CNPJ)', 'bl', 'bloqueante', POP, AMBAS],
+    ['BL-03', 'Notify party informado', 'bl', 'info', POP, AMBAS],
+    ['BL-04', 'Portos de embarque e descarga iguais à invoice', 'bl', 'alerta', POP, AMBAS],
+    ['BL-05', 'Volumes iguais ao packing list', 'bl', 'alerta', POP, AMBAS],
+    ['BL-06', 'Peso bruto igual à invoice e ao packing list', 'bl', 'alerta', POP, AMBAS],
+    ['BL-07', 'Cubagem igual ao packing list', 'bl', 'alerta', POP, AMBAS],
+    ['BL-08', 'Marcas iguais ao packing list', 'bl', 'info', POP, AMBAS],
+    ['BL-09', 'NCM do BL cobre todas as posições dos itens', 'bl', 'alerta', POP, AMBAS],
+    ['BL-10', 'Frete: valor, moeda e modalidade', 'bl', 'alerta', POP, AMBAS],
+    ['BL-11', 'Incoterm igual à invoice', 'bl', 'alerta', POP, AMBAS],
+    ['BL-12', 'Número do container', 'bl', 'alerta', POP, AMBAS],
+    ['BL-13', 'Sem campos provisórios ou texto em outro idioma', 'bl', 'bloqueante', POP, AMBAS],
+    ['BL-14', 'Referências (IP e PO) iguais à invoice', 'bl', 'alerta', POP, AMBAS],
     ['BL-15', 'Declaração de embalagem de madeira', 'bl', 'alerta', 'IN MAPA nº 32/2015 (embalagens de madeira)', AMBAS],
-    ['BL-16', 'Número do BL', 'bl', 'info', 'Conferência documental', AMBAS],
+    ['BL-16', 'Número do BL', 'bl', 'info', POP, AMBAS],
     ['TXT-01', 'Estrutura do arquivo no layout TOTVS', 'txt', 'bloqueante', 'Layout SIGAEIC (TDN TOTVS)', [F3]],
-    ['TXT-02', 'CNPJ do importador', 'txt', 'bloqueante', 'Conferência entre documentos', [F3]],
-    ['TXT-03', 'Referência do processo e número da invoice', 'txt', 'bloqueante', 'Conferência entre documentos', [F3]],
-    ['TXT-04', 'Incoterm e moeda iguais à invoice', 'txt', 'bloqueante', 'Conferência entre documentos', [F3]],
-    ['TXT-05', 'Países de origem, aquisição e procedência', 'txt', 'alerta', 'Conferência entre documentos', [F3]],
-    ['TXT-06', 'Pesos bruto e líquido', 'txt', 'alerta', 'Conferência entre documentos', [F3]],
-    ['TXT-07', 'Frete igual à invoice', 'txt', 'alerta', 'Conferência entre documentos', [F3]],
-    ['TXT-08', 'Seguro', 'txt', 'alerta', 'Conferência entre documentos', [F3]],
-    ['TXT-12', 'Fabricante e exportador', 'txt', 'alerta', 'Conferência entre documentos', [F3]],
-    ['TXT-13', 'Valor de câmbio (CAP3)', 'txt', 'info', 'Conferência entre documentos', [F3]],
-    ['REL-01', 'Cabeçalho do relatório (referências, incoterm, moeda, pesos)', 'relatorio', 'alerta', 'Controle interno', [F3]],
-    ['REL-05', 'Totais, frete e seguro do relatório', 'relatorio', 'alerta', 'Controle interno', [F3]],
-    ['ITM-01', 'Item presente em todos os documentos', 'processo', 'bloqueante', 'Conferência entre documentos', AMBAS],
+    ['TXT-02', 'CNPJ do importador', 'txt', 'bloqueante', POP, [F3]],
+    ['TXT-03', 'Referência do processo e número da invoice', 'txt', 'bloqueante', POP, [F3]],
+    ['TXT-04', 'Incoterm e moeda iguais à invoice', 'txt', 'bloqueante', POP, [F3]],
+    ['TXT-05', 'Países de origem, aquisição e procedência', 'txt', 'alerta', POP, [F3]],
+    ['TXT-06', 'Pesos bruto e líquido', 'txt', 'alerta', POP, [F3]],
+    ['TXT-07', 'Frete igual à invoice', 'txt', 'alerta', POP, [F3]],
+    ['TXT-08', 'Seguro', 'txt', 'alerta', POP, [F3]],
+    ['TXT-12', 'Fabricante e exportador', 'txt', 'alerta', POP, [F3]],
+    ['TXT-13', 'Valor de câmbio (CAP3)', 'txt', 'info', POP, [F3]],
+    ['REL-01', 'Cabeçalho do relatório (referências, incoterm, moeda, pesos)', 'relatorio', 'alerta', POP, [F3]],
+    ['REL-05', 'Totais, frete e seguro do relatório', 'relatorio', 'alerta', POP, [F3]],
+    ['ITM-01', 'Item presente em todos os documentos', 'processo', 'bloqueante', POP, AMBAS],
     ['ITM-02', 'NCM igual nos documentos e no catálogo', 'processo', 'bloqueante', 'Classificação fiscal (NCM)', AMBAS],
-    ['ITM-03', 'Quantidade igual nos documentos', 'processo', 'bloqueante', 'Conferência entre documentos', AMBAS],
-    ['ITM-04', 'Preço unitário e valor iguais nos documentos', 'processo', 'bloqueante', 'Conferência entre documentos', AMBAS],
-    ['ITM-05', 'Peso líquido igual nos documentos', 'processo', 'alerta', 'Conferência entre documentos', AMBAS],
-    ['ITM-06', 'Pedido de compra (PO) igual nos documentos', 'processo', 'alerta', 'Conferência entre documentos', [F3]],
-    ['ITM-07', 'Unidade de medida igual nos documentos', 'processo', 'alerta', 'Conferência entre documentos', [F3]],
+    ['ITM-03', 'Quantidade igual nos documentos', 'processo', 'bloqueante', POP, AMBAS],
+    ['ITM-04', 'Preço unitário e valor iguais nos documentos', 'processo', 'bloqueante', POP, AMBAS],
+    ['ITM-05', 'Peso líquido igual nos documentos', 'processo', 'alerta', POP, AMBAS],
+    ['ITM-06', 'Pedido de compra (PO) igual nos documentos', 'processo', 'alerta', POP, [F3]],
+    ['ITM-07', 'Unidade de medida igual nos documentos', 'processo', 'alerta', POP, [F3]],
     ['ITM-08', 'Descrição do TXT x invoice e catálogo', 'txt', 'alerta', 'Descrição da mercadoria', [F3]],
-    ['ITM-09', 'Descrição do relatório de itens x catálogo vigente', 'relatorio', 'alerta', 'Controle interno', [F3]],
-    ['ITM-10', 'País de origem do item', 'txt', 'alerta', 'Conferência entre documentos', [F3]],
-    ['ITM-11', 'Fabricante do item', 'txt', 'alerta', 'Conferência entre documentos', [F3]],
+    ['ITM-09', 'Descrição do relatório de itens x catálogo vigente', 'relatorio', 'alerta', POP, [F3]],
+    ['ITM-10', 'País de origem do item', 'txt', 'alerta', POP, [F3]],
+    ['ITM-11', 'Fabricante do item', 'txt', 'alerta', POP, [F3]],
     ['TXT-14', 'Descrição do TXT sem caracteres corrompidos', 'txt', 'bloqueante', 'Descrição da mercadoria (DUIMP)', [F3]],
-    ['DIF-01', 'Item validado na planilha de diferimento de ICMS', 'diferimento', 'alerta', 'Controle interno (diferimento de ICMS)', [F3]],
-    ['DIF-02', 'Diferimento e finalidade do item', 'diferimento', 'info', 'Controle interno (diferimento de ICMS)', [F3]],
+    ['DIF-01', 'Item do processo presente na planilha de validação do diferimento', 'diferimento', 'alerta', POP, [F3]],
+    ['DIF-02', 'Finalidade e protocolo informados', 'diferimento', 'alerta', POP, [F3]],
+    ['DIF-03', 'Percentual de diferimento de 100%', 'diferimento', 'alerta', POP + ' (benefício de diferimento do ICMS do cliente)', [F3]],
+    ['DIF-05', 'Descrição resumida coerente com o catálogo', 'diferimento', 'alerta', POP, [F3]],
+    ['DIF-06', 'Ex-tarifário igual ao TXT', 'diferimento', 'alerta', POP, [F3]],
+    ['DIF-07', 'Linhas da planilha sem item no processo ou repetidas', 'diferimento', 'info', POP, [F3]],
+    ['TOT-01', 'Totais iguais ao TXT (registro da DUIMP)', 'processo', 'alerta', POP, AMBAS],
     ['CAT-01', 'Produto cadastrado no catálogo', 'catalogo', 'bloqueante', 'Catálogo de Produtos (Portal Único)', AMBAS],
     ['CAT-02', 'Produto ativo no catálogo', 'catalogo', 'bloqueante', 'Catálogo de Produtos (Portal Único)', AMBAS],
     ['CAT-03', 'Um único produto ativo por código interno', 'catalogo', 'alerta', 'Catálogo de Produtos (Portal Único)', AMBAS],
@@ -122,7 +133,8 @@
         if (!a.sugestao) a.sugestao = a.mensagem;
         if (!a.acaoDocumento && a.acao === 'ajuste_documento') a.acaoDocumento = DOCS[a.documento] || null;
         if (a.incluirPdf == null) a.incluirPdf = incluirPorPadrao(a);
-        a.interna = INTERNAS.has(a.regra) || a.documento === 'relatorio' || a.documento === 'diferimento';
+        a.interna = INTERNAS.has(a.regra) || a.documento === 'relatorio';
+        if (!a.pedido) a.pedido = pedidoPadrao(a);
         a.chave = [a.regra, a.documento, a.item || '', a.campo || '', String(a.encontrado || '')].join('|');
         if (lista.some(x => x.chave === a.chave)) return null;
         a.id = 'a' + (++n);
@@ -187,20 +199,21 @@
     if (inv.itens.some(i => i.pesoLiq != null && i.pesoBruto != null && i.pesoLiq > i.pesoBruto)) inv.itens.filter(i => i.pesoLiq > i.pesoBruto).forEach(i => A.add('INV-07', { item: refItem(i), campo: 'Pesos do item', encontrado: `líquido ${kg(i.pesoLiq)} > bruto ${kg(i.pesoBruto)}`, mensagem: `Item ${refItem(i)} com peso líquido maior que o bruto.`, sugestao: `Conferir os pesos do item ${refItem(i)}: líquido maior que o bruto.` }));
     const T = inv.totais || {};
     if (T.pesoLiq == null) A.add('INV-07', { campo: 'Peso líquido total', encontrado: 'não informado', mensagem: 'Peso líquido total não localizado na fatura.', sugestao: 'Informar o peso líquido total na invoice.' });
-    else if (!iguais(T.pesoLiq, somaLiq, 2)) A.add('INV-07', { campo: 'Peso líquido total', encontrado: kg(T.pesoLiq), esperado: `${kg(somaLiq)} (soma dos itens)`, mensagem: `Peso líquido total (${kg(T.pesoLiq)}) difere da soma dos itens (${kg(somaLiq)}).`, sugestao: `Conferir o peso líquido total da invoice: ${kg(T.pesoLiq)}, soma dos itens ${kg(somaLiq)}.` });
+    else if (Math.abs(T.pesoLiq - somaLiq) > LIM.peso) A.add('INV-07', { campo: 'Peso líquido total', encontrado: kg(T.pesoLiq), esperado: `${kg(somaLiq)} (soma dos itens)`, mensagem: `Peso líquido total (${kg(T.pesoLiq)}) difere da soma dos itens (${kg(somaLiq)}).`, sugestao: `Conferir o peso líquido total da invoice: ${kg(T.pesoLiq)}, soma dos itens ${kg(somaLiq)}.` });
     if (T.pesoBruto == null) A.add('INV-07', { campo: 'Peso bruto total', encontrado: 'não informado', mensagem: 'Peso bruto total não localizado na fatura.', sugestao: 'Informar o peso bruto total na invoice.' });
-    else if (inv.itens.every(i => i.pesoBruto != null) && !iguais(T.pesoBruto, somaBru, 2)) A.add('INV-07', { campo: 'Peso bruto total', encontrado: kg(T.pesoBruto), esperado: `${kg(somaBru)} (soma dos itens)`, mensagem: `Peso bruto total (${kg(T.pesoBruto)}) difere da soma dos itens (${kg(somaBru)}).`, sugestao: `Conferir o peso bruto total da invoice: ${kg(T.pesoBruto)}, soma dos itens ${kg(somaBru)}.` });
+    else if (inv.itens.every(i => i.pesoBruto != null) && Math.abs(T.pesoBruto - somaBru) > LIM.peso) A.add('INV-07', { campo: 'Peso bruto total', encontrado: kg(T.pesoBruto), esperado: `${kg(somaBru)} (soma dos itens)`, mensagem: `Peso bruto total (${kg(T.pesoBruto)}) difere da soma dos itens (${kg(somaBru)}).`, sugestao: `Conferir o peso bruto total da invoice: ${kg(T.pesoBruto)}, soma dos itens ${kg(somaBru)}.` });
     [['paisOrigem', 'origem', 'VIII'], ['paisAquisicao', 'aquisição', 'IX'], ['paisProcedencia', 'procedência', 'X']].forEach(([k, n]) => {
       if (!c[k]) A.add('INV-08', { campo: `País de ${n}`, encontrado: 'não informado', mensagem: `País de ${n} não informado na fatura.`, sugestao: `Informar o país de ${n} na invoice.` });
       else if (!paisCodigo(c[k])) A.add('INV-08', { severidade: 'info', campo: `País de ${n}`, encontrado: c[k], mensagem: `País de ${n} "${c[k]}" sem correspondência na tabela do sistema; conferir manualmente.`, acao: 'ciente_ok' });
     });
-    inv.itens.forEach(i => {
-      const r = refItem(i);
-      if (i.preco == null || i.total == null) A.add('INV-09', { item: r, campo: 'Preço / total', encontrado: 'não informado', mensagem: `Item ${r} sem preço unitário ou valor total.`, sugestao: `Informar preço unitário e valor total do item ${r}.` });
-      else if (!iguais(i.qtd * i.preco, i.total, 2)) A.add('INV-09', { item: r, campo: 'Valor total do item', encontrado: fmt(i.total), esperado: `${fmt(i.qtd * i.preco)} (quantidade × preço)`, mensagem: `Item ${r}: ${fmtAuto(i.qtd, 5)} × ${fmtAuto(i.preco)} = ${fmt(i.qtd * i.preco)}, fatura informa ${fmt(i.total)}.`, sugestao: `Conferir o valor total do item ${r}: quantidade × preço unitário resulta em ${fmt(i.qtd * i.preco)}; a invoice informa ${fmt(i.total)}.` });
-    });
-    if (T.total != null && !iguais(T.total, soma(inv.itens, 'total'), 2)) A.add('INV-14', { campo: 'Valor total', encontrado: fmt(T.total), esperado: `${fmt(soma(inv.itens, 'total'))} (soma dos itens)`, mensagem: 'Valor total da fatura difere da soma dos itens.', sugestao: `Conferir o valor total da invoice: ${fmt(T.total)}, soma dos itens ${fmt(soma(inv.itens, 'total'))}.` });
-    if (T.qtd != null && !iguais(T.qtd, soma(inv.itens, 'qtd'), 5)) A.add('INV-14', { campo: 'Quantidade total', encontrado: fmtAuto(T.qtd), esperado: `${fmtAuto(soma(inv.itens, 'qtd'))} (soma dos itens)`, mensagem: 'Quantidade total difere da soma dos itens.', sugestao: 'Conferir a quantidade total da invoice.' });
+    const semPreco = inv.itens.filter(i => i.preco == null || i.total == null);
+    if (semPreco.length) A.add('INV-09', { campo: 'Preço / total', encontrado: `${semPreco.length} item(ns) sem preço ou total`, mensagem: `Itens sem preço unitário ou valor total: ${semPreco.slice(0, 10).map(refItem).join(', ')}.`, sugestao: `Informar preço unitário e valor total dos itens ${semPreco.slice(0, 10).map(refItem).join(', ')}${semPreco.length > 10 ? '…' : ''}.` });
+    // quantidade × preço ≠ total da linha: arredondamento do exportador só vira ocorrência acima do limite
+    const contas = inv.itens.filter(i => i.preco != null && i.total != null && Math.abs(i.qtd * i.preco - i.total) > LIM.valor);
+    if (contas.length) A.add('INV-09', { campo: 'Valor total do item', encontrado: `${contas.length} item(ns) com diferença acima de ${dinheiro(c.moeda, LIM.valor)}`, esperado: 'quantidade × preço unitário', mensagem: `Quantidade × preço unitário não confere com o valor total em ${contas.length} item(ns): ${contas.slice(0, 6).map(i => `${refItem(i)} (${fmt(i.qtd * i.preco)} × ${fmt(i.total)})`).join('; ')}${contas.length > 6 ? '…' : ''}.`, sugestao: `Conferir o valor total dos itens ${contas.slice(0, 10).map(refItem).join(', ')}${contas.length > 10 ? '…' : ''}: quantidade × preço unitário difere do valor informado em mais de ${dinheiro(c.moeda, LIM.valor)}.` });
+    const somaTot = soma(inv.itens, 'total');
+    if (T.total != null && Math.abs(T.total - somaTot) > LIM.valor) A.add('INV-14', { campo: 'Valor total', encontrado: dinheiro(c.moeda, T.total), esperado: `${dinheiro(c.moeda, somaTot)} (soma dos itens)`, mensagem: `Valor total da fatura (${dinheiro(c.moeda, T.total)}) difere da soma dos itens (${dinheiro(c.moeda, somaTot)}).`, sugestao: `Conferir o valor total da invoice: ${dinheiro(c.moeda, T.total)}; a soma dos itens é ${dinheiro(c.moeda, somaTot)}.` });
+    if (T.qtd != null && !iguais(T.qtd, soma(inv.itens, 'qtd'), 5)) A.add('INV-14', { campo: 'Quantidade total', encontrado: fmtAuto(T.qtd), esperado: `${fmtAuto(soma(inv.itens, 'qtd'))} (soma dos itens)`, mensagem: 'Quantidade total difere da soma dos itens.', sugestao: `Conferir a quantidade total da invoice: ${fmtAuto(T.qtd)}; a soma dos itens é ${fmtAuto(soma(inv.itens, 'qtd'))}.` });
     if (!c.moeda) A.add('INV-11', { campo: 'Moeda', encontrado: 'não identificada', mensagem: 'Moeda da fatura não identificada.', sugestao: 'Indicar a moeda da negociação na invoice.' });
     if (!c.pagamento) A.add('INV-11', { campo: 'Condições de pagamento', encontrado: 'não informadas', mensagem: 'Condição de pagamento não localizada na fatura.', sugestao: 'Informar as condições de pagamento na invoice.' });
     if (!c.incoterm) A.add('INV-12', { severidade: 'bloqueante', campo: 'Incoterm', encontrado: 'não informado', mensagem: 'Incoterm não informado na fatura.', sugestao: 'Informar o incoterm (condição de venda) na invoice.' });
@@ -245,18 +258,13 @@
         const r = refItem(i);
         if (pi.ncm && i.ncm && pi.ncm !== i.ncm) A.add('PKL-02', { item: r, campo: 'NCM', encontrado: fmtNcm(pi.ncm), esperado: fmtNcm(i.ncm), mensagem: `NCM do item ${r} no packing list (${fmtNcm(pi.ncm)}) difere da invoice (${fmtNcm(i.ncm)}).`, sugestao: `Ajustar a NCM do item ${r} no packing list para ${fmtNcm(i.ncm)}, conforme invoice.` });
         if (!iguais(pi.qtd, i.qtd, 5)) A.add('PKL-02', { severidade: 'bloqueante', item: r, campo: 'Quantidade', encontrado: fmtAuto(pi.qtd), esperado: fmtAuto(i.qtd), mensagem: `Quantidade do item ${r} no packing list (${fmtAuto(pi.qtd)}) difere da invoice (${fmtAuto(i.qtd)}).`, sugestao: `Ajustar a quantidade do item ${r} no packing list (${fmtAuto(pi.qtd)}) conforme invoice (${fmtAuto(i.qtd)}).` });
-        if (pi.pesoLiq != null && i.pesoLiq != null && !iguais(pi.pesoLiq, i.pesoLiq, 2)) A.add('PKL-02', { item: r, campo: 'Peso líquido', encontrado: kg(pi.pesoLiq), esperado: kg(i.pesoLiq), mensagem: `Peso líquido do item ${r}: packing ${kg(pi.pesoLiq)} × invoice ${kg(i.pesoLiq)}.`, sugestao: `Ajustar o peso líquido do item ${r} no packing list (${kg(pi.pesoLiq)}) conforme invoice (${kg(i.pesoLiq)}).` });
-        if (pi.pesoBruto != null && i.pesoBruto != null && !iguais(pi.pesoBruto, i.pesoBruto, 2)) A.add('PKL-02', { item: r, campo: 'Peso bruto', encontrado: kg(pi.pesoBruto), esperado: kg(i.pesoBruto), mensagem: `Peso bruto do item ${r}: packing ${kg(pi.pesoBruto)} × invoice ${kg(i.pesoBruto)}.`, sugestao: `Ajustar o peso bruto do item ${r} no packing list (${kg(pi.pesoBruto)}) conforme invoice (${kg(i.pesoBruto)}).` });
         if (pi.descricao && i.descricao && alnum(pi.descricao) !== alnum(i.descricao)) {
           const cmp = D.comparar(i.descricao, pi.descricao);
           A.add('PKL-02', { severidade: cmp.similaridade < 0.6 ? 'alerta' : 'info', item: r, campo: 'Descrição', encontrado: `semelhança ${Math.round(cmp.similaridade * 100)}%`, esperado: 'mesma descrição da invoice', mensagem: `Descrição do item ${r} no packing list difere da invoice.`, sugestao: `Ajustar a descrição do item ${r} no packing list conforme a invoice.` });
         }
       });
       inv.itens.forEach((i, k) => { const sq = i.seq != null ? i.seq : k + 1; if (!vistos.has(sq)) A.add('PKL-02', { severidade: 'bloqueante', item: refItem(i), campo: 'Item', encontrado: 'ausente no packing list', mensagem: `Item ${refItem(i)} da invoice não consta no packing list.`, sugestao: `Incluir o item ${refItem(i)} no packing list.` }); });
-      const a = pkl.totais || {}, b = inv.totais || {};
-      [['qtd', 'Quantidade total', 5, v => fmtAuto(v)], ['pesoLiq', 'Peso líquido total', 2, kg], ['pesoBruto', 'Peso bruto total', 2, kg]].forEach(([k, n, cs, f]) => {
-        if (a[k] != null && b[k] != null && !iguais(a[k], b[k], cs)) A.add('PKL-03', { campo: n, encontrado: f(a[k]), esperado: f(b[k]), mensagem: `${n} do packing list (${f(a[k])}) difere da invoice (${f(b[k])}).`, sugestao: `Ajustar ${n.toLowerCase()} no packing list conforme invoice (${f(b[k])}).` });
-      });
+      // totais do packing list: conferidos em TOT-01
     }
     if (!p.volumes || p.volumes.qtd == null) A.add('PKL-04', { campo: 'Volumes', encontrado: 'não informado', mensagem: 'Quantidade de volumes não localizada no packing list.', sugestao: 'Informar a quantidade e a espécie dos volumes no packing list.' });
     if (p.cubagem == null) A.add('PKL-04', { severidade: 'info', campo: 'Cubagem', encontrado: 'não informada', mensagem: 'Cubagem (m³) não informada no packing list.', sugestao: 'Informar a cubagem total (m³) no packing list.' });
@@ -268,7 +276,7 @@
   function posicoes(x) {
     const s = new Set();
     const add = n => { const d = ncmLimpa(n); if (d.length >= 4) s.add(d.slice(0, 4)); };
-    if (x.itens) x.itens.forEach(o => { if (o.ncmReferencia) add(o.ncmReferencia); });
+    if (x.itens) x.itens.forEach(o => add(o.ncmCatalogo || (o.inv && o.inv.ncms[0]) || (o.txt && o.txt.ncms[0])));
     if (!s.size && x.inv) x.inv.itens.forEach(i => add(i.ncm));
     return s;
   }
@@ -299,7 +307,6 @@
     else if (pv && pv.qtd != null && !iguais(pv.qtd, c.volumes.qtd, 0)) A.add('BL-05', { campo: 'Volumes', encontrado: `${c.volumes.qtd} ${c.volumes.especie || ''}`.trim(), esperado: `${pv.qtd} ${pv.especie || ''}`.trim(), mensagem: `BL com ${c.volumes.qtd} volume(s); packing list com ${pv.qtd}.`, sugestao: `Ajustar a quantidade de volumes no BL (${c.volumes.qtd}) conforme packing list (${pv.qtd}).` });
     const bruto = inv && inv.totais && inv.totais.pesoBruto != null ? inv.totais.pesoBruto : (pkl && pkl.totais ? pkl.totais.pesoBruto : null);
     if (c.pesoBruto == null) A.add('BL-06', { campo: 'Peso bruto', encontrado: 'não informado', mensagem: 'Peso bruto não localizado no BL.', sugestao: 'Informar o peso bruto no BL.' });
-    else if (bruto != null && !iguais(c.pesoBruto, bruto, 2)) A.add('BL-06', { campo: 'Peso bruto', encontrado: kg(c.pesoBruto), esperado: kg(bruto), mensagem: `Peso bruto do BL (${kg(c.pesoBruto)}) difere da invoice/packing list (${kg(bruto)}).`, sugestao: `Ajustar o peso bruto no BL (${kg(c.pesoBruto)}) conforme invoice e packing list (${kg(bruto)}).` });
     if (pkl && pkl.cab.cubagem != null && c.cubagem != null && !iguais(c.cubagem, pkl.cab.cubagem, 2)) A.add('BL-07', { campo: 'Cubagem', encontrado: `${fmt(c.cubagem)} m³`, esperado: `${fmt(pkl.cab.cubagem)} m³`, mensagem: 'Cubagem do BL difere do packing list.', sugestao: `Ajustar a cubagem no BL (${fmt(c.cubagem)} m³) conforme packing list (${fmt(pkl.cab.cubagem)} m³).` });
     if (pkl && pkl.cab.marcas && c.marcas && alnum(pkl.cab.marcas) !== alnum(c.marcas)) A.add('BL-08', { campo: 'Marcas', encontrado: c.marcas, esperado: pkl.cab.marcas, mensagem: 'Marcas do BL diferem do packing list.', sugestao: 'Ajustar as marcas no BL conforme packing list.' });
     const ps = posicoes(x), noBL = new Set((c.ncms || []).map(n => n.slice(0, 4)));
@@ -356,13 +363,11 @@
       if (pA && as.some(o => o !== pA)) A.add('TXT-05', { campo: 'País de aquisição (ITEA)', encontrado: as.map(o => `${o} ${paisNome(o)}`).join(', '), esperado: `${pA} ${paisNome(pA)}`, mensagem: 'País de aquisição do TXT difere da invoice.', sugestao: 'Ajustar o país de aquisição no TXT conforme invoice.' });
       if (pP && tp.capi && tp.capi.paisProcedencia && tp.capi.paisProcedencia !== pP) A.add('TXT-05', { campo: 'País de procedência (CAPI)', encontrado: `${tp.capi.paisProcedencia} ${paisNome(tp.capi.paisProcedencia)}`, esperado: `${pP} ${paisNome(pP)}`, mensagem: 'País de procedência do TXT difere da invoice.', sugestao: 'Ajustar o país de procedência no TXT conforme invoice.' });
       const somaTxt = soma(tp.itens, 'pesoLiq');
-      if (tp.capi && tp.capi.pesoBruto != null && inv.totais && inv.totais.pesoBruto != null && !iguais(tp.capi.pesoBruto, inv.totais.pesoBruto, 2)) A.add('TXT-06', { campo: 'Peso bruto (CAPI)', encontrado: kg(tp.capi.pesoBruto), esperado: kg(inv.totais.pesoBruto), mensagem: `Peso bruto do TXT (${kg(tp.capi.pesoBruto)}) difere da invoice (${kg(inv.totais.pesoBruto)}).`, sugestao: `Ajustar o peso bruto no TXT (${kg(tp.capi.pesoBruto)}) conforme invoice (${kg(inv.totais.pesoBruto)}).` });
-      if (inv.totais && inv.totais.pesoLiq != null && tp.itens.length && !iguais(somaTxt, inv.totais.pesoLiq, 2)) A.add('TXT-06', { campo: 'Peso líquido total', encontrado: `${fmt(somaTxt, 4)} kg (soma ITEA)`, esperado: kg(inv.totais.pesoLiq), mensagem: `Peso líquido total do TXT (${fmt(somaTxt, 4)} kg) difere da invoice (${kg(inv.totais.pesoLiq)}); diferença de ${fmt(Math.abs(somaTxt - inv.totais.pesoLiq), 4)} kg.`, sugestao: `Notar que o peso líquido total do TXT (${fmt(somaTxt, 4)} kg) difere da invoice (${kg(inv.totais.pesoLiq)}).` });
-      if (tp.capi && tp.capi.pesoLiq != null && !iguais(tp.capi.pesoLiq, somaTxt, 2)) A.add('TXT-06', { campo: 'Peso líquido (CAPI)', encontrado: kg(tp.capi.pesoLiq), esperado: `${fmt(somaTxt, 4)} kg (soma ITEA)`, mensagem: 'Peso líquido da capa do TXT difere da soma dos itens.', sugestao: 'Conferir o peso líquido da capa do TXT.' });
+      if (tp.capi && tp.capi.pesoLiq != null && Math.abs(tp.capi.pesoLiq - somaTxt) > LIM.peso) A.add('TXT-06', { campo: 'Peso líquido (CAPI)', encontrado: kg(tp.capi.pesoLiq), esperado: `${fmt(somaTxt, 4)} kg (soma ITEA)`, mensagem: 'Peso líquido da capa do TXT difere da soma dos itens.', sugestao: 'Conferir o peso líquido da capa do TXT.' });
       const c2 = tp.cap2 || {};
       const fTxt = (c2.fretePrepaid || 0) + (c2.freteCollect || 0), mTxt = moedaISO(c2.moedaFrete);
       const fInv = inv.cab.frete && inv.cab.frete.valor;
-      if (fInv && fTxt && !iguais(fInv, fTxt, 2)) A.add('TXT-07', { severidade: 'bloqueante', campo: 'Frete (CAP2)', encontrado: dinheiro(mTxt, fTxt), esperado: dinheiro(inv.cab.moeda, fInv), mensagem: 'Frete do TXT difere do frete destacado na invoice.', sugestao: `Ajustar o frete no TXT (${dinheiro(mTxt, fTxt)}) conforme invoice (${dinheiro(inv.cab.moeda, fInv)}).` });
+      if (fInv && fTxt && Math.abs(fInv - fTxt) > LIM.valor) A.add('TXT-07', { severidade: 'bloqueante', campo: 'Frete (CAP2)', encontrado: dinheiro(mTxt, fTxt), esperado: dinheiro(inv.cab.moeda, fInv), mensagem: 'Frete do TXT difere do frete destacado na invoice.', sugestao: `Ajustar o frete no TXT (${dinheiro(mTxt, fTxt)}) conforme invoice (${dinheiro(inv.cab.moeda, fInv)}).` });
       if (!fTxt && inv.cab.incoterm && INCOTERM_COM_FRETE.includes(inv.cab.incoterm)) A.add('TXT-07', { campo: 'Frete (CAP2)', encontrado: 'não informado', mensagem: `TXT sem valor de frete com incoterm ${inv.cab.incoterm}.`, sugestao: 'Informar o valor do frete no TXT.' });
       if (fTxt && mTxt && inv.cab.moeda && mTxt !== inv.cab.moeda) A.add('TXT-07', { severidade: 'info', campo: 'Moeda do frete', encontrado: mTxt, esperado: inv.cab.moeda, mensagem: `Frete do TXT em ${mTxt}, moeda da fatura ${inv.cab.moeda}.`, acao: 'ciente_ok' });
       if (c2.valorSeguro) {
@@ -418,6 +423,43 @@
     }
   }
 
+  /* ---------------- planilha de validação do diferimento de ICMS ---------------- */
+  // 1 = 100% (fração), "100%", "100", "0,5"...
+  function pctDiferimento(v) {
+    const t = String(v == null ? '' : v).replace('%', '').replace(',', '.').trim();
+    if (!t) return null;
+    const n = Number(t);
+    if (!isFinite(n)) return null;
+    return Math.round((n <= 1 && !/%/.test(String(v)) ? n * 100 : n) * 100) / 100;
+  }
+  const semEx = v => { const t = norm(v).replace(/[^A-Z0-9]/g, ''); return !t || /^(NA|NAO|N|0+|SEM|NENHUM)$/.test(t) ? '' : t.replace(/^0+/, ''); };
+  function regrasDiferimentoItem(o, ref, add, tp) {
+    const d = o.dif, lin = `linha ${d.linhas.join(', ')} da planilha`;
+    if (d.pct == null) add('DIF-03', { campo: 'Diferimento', encontrado: d.diferimento || 'em branco', esperado: '100%', mensagem: `Item ${ref} sem percentual de diferimento informado (${lin}).`, sugestao: `O item ${ref} está sem percentual de diferimento na planilha de validação. Gentileza informar o percentual (100% para itens com o benefício).`, acao: 'ajuste_cliente' });
+    else if (d.pct !== 100) add('DIF-03', { severidade: 'alerta', campo: 'Diferimento', encontrado: `${fmtAuto(d.pct)}%`, esperado: '100%', mensagem: `Item ${ref} com diferimento de ${fmtAuto(d.pct)}% na planilha${d.pct === 0 ? ' (sem benefício: haverá recolhimento de ICMS)' : ''}.`, sugestao: `O item ${ref} consta com ${fmtAuto(d.pct)}% de diferimento na planilha de validação${d.pct === 0 ? ', ou seja, sem o benefício e com recolhimento de ICMS' : ', ou seja, com recolhimento parcial de ICMS'}. Gentileza confirmar se o tratamento está correto.`, acao: 'ajuste_cliente' });
+    if (!d.finalidade) add('DIF-02', { campo: 'Finalidade', encontrado: 'em branco', mensagem: `Item ${ref} sem finalidade na planilha de validação (${lin}).`, sugestao: `Informar a finalidade do item ${ref} na planilha de validação do diferimento.` });
+    if (d.pct > 0 && !d.protocolo) add('DIF-02', { campo: 'Protocolo ICMS', encontrado: 'em branco', mensagem: `Item ${ref} com diferimento e sem protocolo/fundamento informado (${lin}).`, sugestao: `Informar o protocolo (fundamento legal do diferimento) do item ${ref} na planilha de validação.` });
+    if (d.variantes > 1) add('DIF-07', { severidade: 'alerta', campo: 'Linhas repetidas', encontrado: `${d.linhas.length} linhas com dados diferentes`, mensagem: `Item ${ref} aparece em ${d.linhas.length} linhas da planilha com dados diferentes (NCM, diferimento, finalidade ou ex).`, sugestao: `O item ${ref} aparece mais de uma vez na planilha de validação com informações diferentes (${lin}). Gentileza manter uma única linha com os dados corretos.` });
+    // descrição resumida x catálogo (ou TXT, sem catálogo)
+    const base = o.cat && o.cat.produto ? ['catálogo', K.descricaoSemCodigo(o.cat.produto, o.codigo)] : o.txt ? ['TXT', o.txt.descricao] : o.inv ? ['invoice', o.inv.descricao] : null;
+    if (!d.descricao) add('DIF-05', { campo: 'Descrição resumida', encontrado: 'em branco', mensagem: `Item ${ref} sem descrição na planilha de validação.`, sugestao: `Informar a descrição resumida do item ${ref} na planilha de validação do diferimento.` });
+    else if (base && base[1]) {
+      const cmp = D.comparar(d.descricao, base[1]);
+      if (cmp.similaridade < 0.25 && cmp.contencao < 0.5) add('DIF-05', { campo: 'Descrição resumida', encontrado: `semelhança ${Math.round(cmp.similaridade * 100)}% com o ${base[0]}`, esperado: `mesmo produto do ${base[0]}`, mensagem: `Descrição do item ${ref} na planilha de validação não corresponde ao ${base[0]}.`, sugestao: `A descrição resumida do item ${ref} na planilha de validação não corresponde ao produto do ${base[0] === 'catálogo' ? 'Catálogo de Produtos' : base[0]}. Gentileza confirmar se o item validado é o mesmo do processo.`, acao: 'ajuste_cliente' });
+    }
+    // ex-tarifário x TXT
+    if (o.txt && tp) {
+      const exTxt = [...new Set((o.txt.exs || []).map(semEx))].filter(Boolean), exPl = semEx(d.ex), exPlTxt = exPl ? String(d.ex).trim() : '';
+      if (exPl !== (exTxt[0] || '') || exTxt.length > 1) add('DIF-06', { campo: 'Ex-tarifário', encontrado: exPl ? `Ex ${exPlTxt}` : 'sem ex (N/A)', esperado: exTxt.length ? `Ex ${exTxt.join(' / ')} (TXT)` : 'sem ex (TXT)', mensagem: `Ex-tarifário do item ${ref}: planilha ${exPl ? 'Ex ' + exPlTxt : 'N/A'} × TXT ${exTxt.length ? 'Ex ' + exTxt.join('/') : 'sem ex'}.`, sugestao: `O ex-tarifário do item ${ref} na planilha de validação (${exPl ? 'Ex ' + exPlTxt : 'N/A'}) difere do TXT (${exTxt.length ? 'Ex ' + exTxt.join('/') : 'sem ex'}). Gentileza confirmar.`, acao: 'ajuste_cliente' });
+    }
+  }
+  function regrasDiferimentoPlanilha(x, mapa) {
+    const { dif, A } = x;
+    if (!dif) return;
+    const fora = [...new Set(dif.itens.filter(i => { const o = mapa.get(normCod(i.codigo)); return !o || (!o.txt && !o.inv); }).map(i => i.codigo))];
+    if (fora.length) A.add('DIF-07', { campo: 'Itens a mais', encontrado: `${fora.length} código(s)`, mensagem: `Planilha de validação com ${fora.length} código(s) que não constam no processo: ${fora.slice(0, 10).join(', ')}${fora.length > 10 ? '…' : ''}.`, sugestao: `A planilha de validação traz ${fora.length} código(s) que não constam na invoice nem no TXT deste processo (${fora.slice(0, 10).join(', ')}${fora.length > 10 ? '…' : ''}). Gentileza confirmar se a planilha é a deste embarque.`, acao: 'ajuste_cliente' });
+  }
+
   /* ---------------- conciliação item a item ---------------- */
   function agregar(lista, chaveFn) {
     const m = new Map();
@@ -438,13 +480,13 @@
     });
     if (tp) agregar(tp.itens, i => normCod(i.codigo)).forEach(l => {
       const o = pega(l[0].codigo);
-      o.txt = { linhas: l, seqs: l.map(i => i.seq), ncms: [...new Set(l.map(i => i.ncm).filter(Boolean))], qtd: soma(l, 'qtd'), precos: [...new Set(l.map(i => arred(i.precoUnit, 6)).filter(v => v != null))], valor: soma(l, 'valor'), pesoLiq: soma(l, 'pesoLiq'), unidades: [...new Set(l.map(i => i.unidade).filter(Boolean))], pos: [...new Set(l.map(i => i.po).filter(Boolean))], descricoes: [...new Set(l.map(i => i.descricao))], descricao: l[0].descricao, origens: [...new Set(l.map(i => i.paisOrigem).filter(Boolean))], fabricantes: [...new Set(l.map(i => i.codFabricante).filter(Boolean))], aliqII: l[0].aliqII };
+      o.txt = { linhas: l, seqs: l.map(i => i.seq), ncms: [...new Set(l.map(i => i.ncm).filter(Boolean))], qtd: soma(l, 'qtd'), precos: [...new Set(l.map(i => arred(i.precoUnit, 6)).filter(v => v != null))], valor: soma(l, 'valor'), pesoLiq: soma(l, 'pesoLiq'), unidades: [...new Set(l.map(i => i.unidade).filter(Boolean))], pos: [...new Set(l.map(i => i.po).filter(Boolean))], descricoes: [...new Set(l.map(i => i.descricao))], descricao: l[0].descricao, origens: [...new Set(l.map(i => i.paisOrigem).filter(Boolean))], exs: l.map(i => i.exNcm), fabricantes: [...new Set(l.map(i => i.codFabricante).filter(Boolean))], aliqII: l[0].aliqII };
     });
     if (rel) agregar(rel.itens, i => normCod(i.codigo)).forEach(l => {
       const o = pega(l[0].codigo);
       o.rel = { linhas: l, adicoes: [...new Set(l.map(i => i.adicao))], ncms: [...new Set(l.map(i => i.ncm).filter(Boolean))], qtd: soma(l, 'qtd'), precos: [...new Set(l.map(i => arred(i.unitMoeda, 6)).filter(v => v != null))], total: soma(l, 'totalMoeda'), pesoLiq: soma(l, 'pesoLiq'), unidade: l[0].unidade, descricao: l[0].descricao, fabricante: l[0].fabricante, aliquotas: { II: l[0].aliqII, IPI: l[0].aliqIPI, PIS: l[0].aliqPIS, COFINS: l[0].aliqCOFINS } };
     });
-    if (x.dif) agregar(x.dif.itens, i => normCod(i.codigo)).forEach(l => { const o = mapa.get(normCod(l[0].codigo)); if (o) o.dif = { ncms: [...new Set(l.map(i => i.ncm).filter(Boolean))], diferimento: l[0].diferimento, finalidade: l[0].finalidade, ex: l[0].ex }; });
+    if (x.dif) agregar(x.dif.itens, i => normCod(i.codigo)).forEach(l => { const o = mapa.get(normCod(l[0].codigo)); if (o) o.dif = { linhas: l.map(i => i.linha), ncms: [...new Set(l.map(i => i.ncm).filter(Boolean))], diferimento: l[0].diferimento, pct: pctDiferimento(l[0].diferimento), finalidade: l[0].finalidade, protocolo: l[0].protocolo, ex: l[0].ex, textoEx: l[0].textoEx, descricao: l[0].descricao, variantes: new Set(l.map(i => [ncmLimpa(i.ncm), i.diferimento, i.finalidade, i.ex].join('|'))).size }; });
     const itens = [];
     mapa.forEach(o => {
       const cod = o.codigo, ref = cod.startsWith('#') ? `nº ${cod.slice(1)}` : cod;
@@ -478,41 +520,42 @@
           }
         }
       }
-      // NCM: referência por maioria (catálogo desempata)
-      const votos = new Map();
-      const fontesNcm = [];
-      if (o.inv) o.inv.ncms.forEach(n => fontesNcm.push(['invoice', n, 1]));
-      if (o.txt) o.txt.ncms.forEach(n => fontesNcm.push(['txt', n, 1]));
-      if (o.rel) o.rel.ncms.forEach(n => fontesNcm.push(['relatorio', n, 1]));
-      if (o.dif) o.dif.ncms.forEach(n => fontesNcm.push(['diferimento', n, 1]));
-      if (x.dif && !cod.startsWith('#')) {
-        if (!o.dif) add('DIF-01', { campo: 'Item', encontrado: 'não consta', esperado: 'item validado', mensagem: `Item ${ref} não consta na planilha de validação do diferimento de ICMS.`, sugestao: `Incluir o item ${ref} na planilha de validação do diferimento de ICMS.` });
-        else if (String(o.dif.diferimento).trim() !== '1') add('DIF-02', { campo: 'Diferimento', encontrado: o.dif.diferimento || 'em branco', esperado: '1 (com diferimento)', mensagem: `Item ${ref} sem diferimento marcado na planilha (${o.dif.finalidade || 'finalidade não informada'}).`, sugestao: `Confirmar o tratamento de ICMS do item ${ref}.`, acao: 'ciente_ok' });
+      // NCM: o catálogo é soberano (é o que vale no registro da DUIMP); cada documento é confrontado com ele
+      const ncmDocs = [];
+      if (o.inv) o.inv.ncms.forEach(n => ncmDocs.push(['invoice', n]));
+      if (o.txt) o.txt.ncms.forEach(n => ncmDocs.push(['txt', n]));
+      if (o.dif) o.dif.ncms.forEach(n => ncmDocs.push(['diferimento', n]));
+      const ncmCat = o.cat && o.cat.produto ? o.cat.produto.ncm : null;
+      o.ncmCatalogo = ncmCat;
+      const ondeDoc = d => d === 'txt' ? 'no TXT' : d === 'diferimento' ? 'na planilha de validação do diferimento' : 'na invoice';
+      if (ncmCat) {
+        const div = ncmDocs.filter(([, n]) => n !== ncmCat);
+        const docsDiv = [...new Set(div.map(([d]) => d))], ncmsDiv = [...new Set(div.map(([, n]) => n))];
+        const prodTxt = `produto ${o.cat.produto.codigo} v${o.cat.produto.versao}`;
+        if (div.length && docsDiv.length === new Set(ncmDocs.map(([d]) => d)).size && ncmsDiv.length === 1) {
+          // todos os documentos concordam entre si e só o catálogo difere: uma ocorrência, na seção do catálogo
+          const nomes = listaPt(docsDiv.map(d => COM_ARTIGO[d]));
+          add('ITM-02', { documento: 'catalogo', campo: 'NCM', encontrado: `${fmtNcm(ncmsDiv[0])} (${docsDiv.map(d => DOCS[d]).join(', ')})`, esperado: `${fmtNcm(ncmCat)} (Catálogo de Produtos, ${prodTxt})`, mensagem: `Item ${ref}: ${nomes} ${docsDiv.length > 1 ? 'trazem' : 'traz'} a NCM ${fmtNcm(ncmsDiv[0])}; o Catálogo de Produtos tem ${fmtNcm(ncmCat)}.`, sugestao: `O item ${ref} está cadastrado no Catálogo de Produtos com a NCM ${fmtNcm(ncmCat)} (${prodTxt}), utilizada no registro da DUIMP, mas ${nomes} ${docsDiv.length > 1 ? 'trazem' : 'traz'} a NCM ${fmtNcm(ncmsDiv[0])}. Gentileza validar qual é a classificação correta: ajustar os documentos ou atualizar o catálogo.`, acao: 'ajuste_cliente' });
+        } else docsDiv.forEach(doc => {
+          const ns = [...new Set(div.filter(([d]) => d === doc).map(([, n]) => n))];
+          add('ITM-02', { documento: doc, campo: 'NCM', encontrado: ns.map(fmtNcm).join(' / '), esperado: `${fmtNcm(ncmCat)} (Catálogo de Produtos, ${prodTxt})`, mensagem: `NCM do item ${ref} ${ondeDoc(doc)} (${ns.map(fmtNcm).join(' / ')}) diverge do Catálogo de Produtos (${fmtNcm(ncmCat)}).`, sugestao: `O item ${ref} consta com a NCM ${ns.map(fmtNcm).join(' / ')} ${ondeDoc(doc)}, mas está cadastrado no Catálogo de Produtos com a NCM ${fmtNcm(ncmCat)}, utilizada no registro da DUIMP. Gentileza validar a classificação e ajustar o documento ou confirmar a atualização do catálogo.`, acao: 'ajuste_cliente' });
+        });
+      } else {
+        const distintas = [...new Set(ncmDocs.map(([, n]) => n))];
+        if (distintas.length > 1) add('ITM-02', { documento: 'processo', campo: 'NCM', encontrado: ncmDocs.map(([d, n]) => `${DOCS[d]} ${fmtNcm(n)}`).join('; '), esperado: 'mesma NCM em todos os documentos', mensagem: `Item ${ref} sem produto ativo no catálogo e com NCMs diferentes entre os documentos.`, sugestao: `O item ${ref} aparece com NCMs diferentes entre os documentos (${ncmDocs.map(([d, n]) => `${DOCS[d]}: ${fmtNcm(n)}`).join('; ')}) e não tem produto ativo no Catálogo de Produtos. Gentileza confirmar a NCM correta.`, acao: 'ajuste_cliente' });
       }
-      if (o.cat && o.cat.produto) fontesNcm.push(['catalogo', o.cat.produto.ncm, 1.5]);
-      fontesNcm.forEach(([, n, w]) => votos.set(n, (votos.get(n) || 0) + w));
-      let refN = null, best = -1;
-      votos.forEach((v, n) => { if (v > best) { best = v; refN = n; } });
-      o.ncmReferencia = refN;
-      const docsRef = fontesNcm.filter(f => f[1] === refN).map(f => f[0]);
-      const nomesRef = docsRef.map(d => DOCS[d]);
-      fontesNcm.filter(f => f[1] !== refN).forEach(([doc, n]) => {
-        const txtRef = `${listaPt(docsRef.map(d => COM_ARTIGO[d]))} (${fmtNcm(refN)})`;
-        const sug = doc === 'catalogo'
-          ? `NCM do item ${ref} no Catálogo de Produtos (${fmtNcm(n)}) diverge dos documentos (${fmtNcm(refN)}). Avaliar atualização do catálogo.`
-          : doc === 'diferimento' ? `Planilha de diferimento de ICMS com NCM ${fmtNcm(n)} para o item ${ref}; referência ${txtRef}. Atualizar a planilha.`
-          : doc === 'relatorio' ? `Relatório de itens/numerário calculado com NCM ${fmtNcm(n)} para o item ${ref}; referência ${txtRef}. Atualizar relatório e numerário.`
-            : `Notar que o item ${ref} está com a NCM ${fmtNcm(n)} ${doc === 'txt' ? 'no TXT' : 'na invoice'}, em desconformidade com ${txtRef}. Gentileza verificar.`;
-        add('ITM-02', { documento: doc, campo: 'NCM', encontrado: fmtNcm(n), esperado: `${fmtNcm(refN)} (${nomesRef.join(', ')})`, mensagem: `NCM do item ${ref}: ${DOCS[doc]} ${fmtNcm(n)} × ${txtRef}.`, sugestao: sug, acao: doc === 'catalogo' ? 'ajuste_catalogo' : 'ajuste_documento' });
-      });
-      ['inv', 'txt', 'rel'].forEach(k => { if (o[k] && o[k].ncms.length > 1) add('ITM-02', { documento: k === 'inv' ? 'invoice' : k === 'rel' ? 'relatorio' : 'txt', campo: 'NCM', encontrado: o[k].ncms.map(fmtNcm).join(' / '), esperado: 'uma única NCM por código', mensagem: `Item ${ref} com mais de uma NCM no mesmo documento.`, sugestao: `Item ${ref} aparece com NCMs diferentes (${o[k].ncms.map(fmtNcm).join(' / ')}). Gentileza verificar.` }); });
+      ['inv', 'txt'].forEach(k => { if (o[k] && o[k].ncms.length > 1) add('ITM-02', { documento: k === 'inv' ? 'invoice' : 'txt', campo: 'NCM', encontrado: o[k].ncms.map(fmtNcm).join(' / '), esperado: 'uma única NCM por código', mensagem: `Item ${ref} com mais de uma NCM no mesmo documento.`, sugestao: `O item ${ref} aparece com NCMs diferentes no mesmo documento (${o[k].ncms.map(fmtNcm).join(' / ')}). Gentileza verificar.` }); });
+      // planilha de validação do diferimento de ICMS
+      if (x.dif && !cod.startsWith('#')) {
+        if (!o.dif) add('DIF-01', { campo: 'Item', encontrado: 'não consta', esperado: 'item validado na planilha', mensagem: `Item ${ref} não consta na planilha de validação do diferimento de ICMS.`, sugestao: `Incluir o item ${ref} na planilha de validação do diferimento de ICMS.` });
+        else regrasDiferimentoItem(o, ref, add, tp);
+      }
       // quantidade, preço, valor e peso (cadeia invoice → TXT → relatório)
       if (o.inv && o.txt) {
         if (!iguais(o.inv.qtd, o.txt.qtd, 5)) add('ITM-03', { documento: 'txt', campo: 'Quantidade', encontrado: `${fmtAuto(o.txt.qtd)} (TXT)`, esperado: `${fmtAuto(o.inv.qtd)} (invoice)`, mensagem: `Quantidade do item ${ref}: TXT ${fmtAuto(o.txt.qtd)} × invoice ${fmtAuto(o.inv.qtd)}.`, sugestao: `Notar que a quantidade do item ${ref} no TXT (${fmtAuto(o.txt.qtd)}) difere da invoice (${fmtAuto(o.inv.qtd)}).` });
-        const pi = o.inv.precos, pt = o.txt.precos;
-        if (pi.length && pt.length && (pt.some(p => !pi.some(q => iguais(p, q, 6))))) add('ITM-04', { documento: 'txt', campo: 'Preço unitário', encontrado: pt.map(p => fmtAuto(p)).join(' / '), esperado: pi.map(p => fmtAuto(p)).join(' / '), mensagem: `Preço unitário do item ${ref}: TXT ${pt.map(p => fmtAuto(p)).join(' / ')} × invoice ${pi.map(p => fmtAuto(p)).join(' / ')}.`, sugestao: `Notar que o preço unitário do item ${ref} no TXT difere da invoice (${pi.map(p => fmtAuto(p)).join(' / ')}).` });
-        else if (!iguais(o.inv.total, o.txt.valor, 2)) add('ITM-04', { documento: 'txt', campo: 'Valor do item', encontrado: `${fmt(o.txt.valor)} (TXT)`, esperado: `${fmt(o.inv.total)} (invoice)`, mensagem: `Valor do item ${ref}: TXT ${fmt(o.txt.valor)} × invoice ${fmt(o.inv.total)}.`, sugestao: `Notar que o valor do item ${ref} no TXT (${fmt(o.txt.valor)}) difere da invoice (${fmt(o.inv.total)}).` });
-        if (!iguais(o.inv.pesoLiq, o.txt.pesoLiq, 2)) add('ITM-05', { documento: 'txt', campo: 'Peso líquido', encontrado: `${fmt(o.txt.pesoLiq, 4)} kg (TXT)`, esperado: `${kg(o.inv.pesoLiq)} (invoice)`, mensagem: `Peso líquido do item ${ref}: TXT ${fmt(o.txt.pesoLiq, 4)} kg × invoice ${kg(o.inv.pesoLiq)} (dif. ${fmt(Math.abs(o.txt.pesoLiq - o.inv.pesoLiq), 4)} kg).`, sugestao: `Notar que o peso líquido do item ${ref} no TXT (${fmt(o.txt.pesoLiq, 4)} kg) difere da invoice (${kg(o.inv.pesoLiq)}).` });
+        // valor e peso por item não geram ocorrência própria: entram no confronto dos totais (TOT-01), onde o TXT manda
+        o.difValor = (o.txt.valor || 0) - (o.inv.total || 0);
+        o.difPesoLiq = (o.txt.pesoLiq || 0) - (o.inv.pesoLiq || 0);
         const pInv = pos(o.inv.po), pTxt = new Set(o.txt.pos.map(p => p.replace(/^0+/, '')));
         if (pInv.size && pTxt.size && fmtSet(pInv) !== fmtSet(pTxt)) add('ITM-06', { documento: 'txt', campo: 'Pedido (PO)', encontrado: fmtSet(pTxt), esperado: fmtSet(pInv), mensagem: `Pedidos do item ${ref}: TXT ${fmtSet(pTxt)} × invoice ${fmtSet(pInv)}.`, sugestao: `Notar que os pedidos (PO) do item ${ref} no TXT (${fmtSet(pTxt)}) diferem da invoice (${fmtSet(pInv)}).` });
         const ui = unidadeBase(o.inv.unidade), ut = o.txt.unidades.map(unidadeBase);
@@ -564,7 +607,59 @@
       }
       itens.push(o);
     });
+    regrasDiferimentoPlanilha(x, mapa);
     return itens;
+  }
+
+  /* ---------------- totais: o TXT manda (registro da DUIMP) ---------------- */
+  function regrasTotais(x) {
+    const { inv, pkl, bl, tp, A } = x;
+    const T = (d, k) => d && d.totais && d.totais[k] != null ? d.totais[k] : (d && d.itens && d.itens.length && d.itens.every(i => i[k] != null) ? soma(d.itens, k) : null);
+    const moeda = inv ? inv.cab.moeda : null;
+    const vals = {
+      txt: tp ? { qtd: soma(tp.itens, 'qtd'), valor: soma(tp.itens, 'valor'), pesoLiq: soma(tp.itens, 'pesoLiq'), pesoBruto: tp.capi && tp.capi.pesoBruto != null ? tp.capi.pesoBruto : null, volumes: tp.capi && tp.capi.volumes != null ? tp.capi.volumes : null } : null,
+      invoice: inv ? { qtd: T(inv, 'qtd'), valor: T(inv, 'total'), pesoLiq: T(inv, 'pesoLiq'), pesoBruto: T(inv, 'pesoBruto'), volumes: inv.cab.volumes ? inv.cab.volumes.qtd : null } : null,
+      packing: pkl ? { qtd: T(pkl, 'qtd'), valor: null, pesoLiq: T(pkl, 'pesoLiq'), pesoBruto: T(pkl, 'pesoBruto'), volumes: pkl.cab.volumes ? pkl.cab.volumes.qtd : null } : null,
+      bl: bl ? { qtd: null, valor: null, pesoLiq: null, pesoBruto: bl.cab.pesoBruto, volumes: bl.cab.volumes ? bl.cab.volumes.qtd : null } : null
+    };
+    const ref = tp ? 'txt' : inv ? 'invoice' : pkl ? 'packing' : null;
+    if (!ref) return null;
+    const MED = [
+      ['qtd', 'Quantidade', '', LIM.qtd, 5, v => fmtAuto(v, 5)],
+      ['valor', `Valor${moeda ? ' (' + moeda + ')' : ''}`, moeda || '', LIM.valor, 2, v => fmt(v, 2)],
+      ['pesoLiq', 'Peso líquido (kg)', 'kg', LIM.peso, tp ? 4 : 2, v => fmt(v, tp ? 4 : 2)],
+      ['pesoBruto', 'Peso bruto (kg)', 'kg', LIM.peso, tp ? 4 : 2, v => fmt(v, tp ? 4 : 2)],
+      ['volumes', 'Volumes', '', LIM.volumes, 0, v => fmtAuto(v, 0)]
+    ];
+    const docs = ['txt', 'invoice', 'packing', 'bl'].filter(d => vals[d]);
+    const linhas = MED.map(([k, nome, un, lim, casas, f]) => {
+      let base = vals[ref][k], baseDoc = ref;
+      if (base == null) { const alt = docs.find(d => vals[d][k] != null); base = alt ? vals[alt][k] : null; baseDoc = alt || ref; }
+      const porDoc = {};
+      docs.forEach(d => {
+        const v = vals[d][k];
+        if (v == null) return;
+        const dif = base == null ? null : v - base;
+        porDoc[d] = { valor: v, dif, ok: dif == null || Math.abs(dif) <= lim + 1e-9 };
+      });
+      return { chave: k, nome, unidade: un, limite: lim, base: baseDoc, valorBase: base, porDoc };
+    }).filter(l => Object.keys(l.porDoc).length);
+    // uma ocorrência por total e documento, só acima do limite
+    linhas.filter(l => l.chave !== 'volumes').forEach(l => {
+      const [, , un, lim, , f] = MED.find(m => m[0] === l.chave);
+      Object.entries(l.porDoc).filter(([d, r]) => d !== l.base && !r.ok).forEach(([d, r]) => {
+        const nb = DOCS[l.base], nd = DOCS[d], u = un === 'kg' ? ' kg' : '';
+        let detalhe = '';
+        if (x.itens && ((d === 'invoice' && l.base === 'txt') || (d === 'txt' && l.base === 'invoice')) && (l.chave === 'valor' || l.chave === 'pesoLiq')) {
+          const campo = l.chave === 'valor' ? 'difValor' : 'difPesoLiq';
+          const top = x.itens.filter(o => o[campo] != null && Math.abs(o[campo]) > 1e-6).sort((a, b) => Math.abs(b[campo]) - Math.abs(a[campo])).slice(0, 6);
+          if (top.length) detalhe = ` Itens com maior diferença: ${top.map(o => `${o.codigo} (${o[campo] > 0 ? '+' : ''}${f(o[campo])}${u})`).join('; ')}.`;
+        }
+        const dir = l.base === 'txt' ? ' O TXT é a referência para o registro da DUIMP.' : '';
+        A.add('TOT-01', { documento: d === 'txt' ? 'txt' : d, campo: `Total: ${l.nome.toLowerCase()}`, encontrado: `${f(r.valor)}${u} (${nd})`, esperado: `${f(l.valorBase)}${u} (${nb})`, mensagem: `${l.nome}: ${nd} ${f(r.valor)}${u} × ${nb} ${f(l.valorBase)}${u}; diferença de ${f(Math.abs(r.dif))}${u}, acima do limite de ${l.chave === 'qtd' ? '0' : f(lim)}${u}.${detalhe}`, sugestao: `O total de ${l.nome.toLowerCase().replace(/ \(.*\)$/, '')} ${'n' + COM_ARTIGO[d]} (${f(r.valor)}${u}) difere ${l.base === 'txt' ? 'do TXT' : 'da invoice'} (${f(l.valorBase)}${u}) em ${f(Math.abs(r.dif))}${u}.${detalhe}${dir} Gentileza validar.`, acao: 'ajuste_cliente' });
+      });
+    });
+    return { referencia: ref, moeda, documentos: docs, linhas };
   }
 
   /* ---------------- análise ---------------- */
@@ -583,13 +678,14 @@
     regrasRelatorio(x);
     x.itens = conciliarItens(x);
     regrasBL(x);
+    x.totais = regrasTotais(x);
     const ordemDoc = Object.fromEntries(SECOES.map(([k], i) => [k, i]));
     const achados = x.A.lista.sort((a, b) => (ordemDoc[a.documento] - ordemDoc[b.documento]) || (PESO_SEV[b.severidade] - PESO_SEV[a.severidade]) || String(a.item || '').localeCompare(String(b.item || '')));
     const itens = x.itens.map(o => {
       const meus = achados.filter(a => a.item && normCod(a.item) === normCod(o.codigo.startsWith('#') ? `nº ${o.codigo.slice(1)}` : o.codigo));
       const sev = meus.reduce((m, a) => Math.max(m, PESO_SEV[a.severidade]), 0);
       const limpa = v => v && Object.fromEntries(Object.entries(v).filter(([k]) => k !== 'linhas'));
-      return { codigo: o.codigo, ncmReferencia: o.ncmReferencia, status: sev === 3 ? 'bloqueante' : sev === 2 ? 'alerta' : sev === 1 ? 'info' : 'ok', invoice: limpa(o.inv), packing: o.pkl, txt: limpa(o.txt), relatorio: limpa(o.rel), diferimento: o.dif || null, catalogo: o.cat, comparacaoFatura: o.comparacaoFatura || null, comparacaoTxt: o.comparacaoTxt || null, achados: meus.map(a => a.id) };
+      return { codigo: o.codigo, ncmCatalogo: o.ncmCatalogo || null, status: sev === 3 ? 'bloqueante' : sev === 2 ? 'alerta' : sev === 1 ? 'info' : 'ok', invoice: limpa(o.inv), packing: o.pkl, txt: limpa(o.txt), relatorio: limpa(o.rel), diferimento: o.dif || null, catalogo: o.cat, comparacaoFatura: o.comparacaoFatura || null, comparacaoTxt: o.comparacaoTxt || null, achados: meus.map(a => a.id) };
     });
     const cont = s => achados.filter(a => a.severidade === s).length;
     const presentes = Object.entries({ invoice: x.inv, packing: x.pkl, bl: x.bl, txt: x.txt, relatorio: x.rel, diferimento: x.dif }).filter(([, v]) => v).map(([k]) => k);
@@ -604,30 +700,33 @@
         diferimento: x.dif ? { aba: x.dif.aba, linhas: x.dif.itens.length } : null,
         relatorio: x.rel ? { refAgil: x.rel.cab.refAgil, refCliente: x.rel.cab.refCliente, moeda: x.rel.cab.moeda, taxaMoeda: x.rel.cab.taxaMoeda, taxaUsd: x.rel.cab.taxaUsd, totais: x.rel.totais, linhas: x.rel.itens.length } : null
       },
-      achados, itens
+      achados, itens, totais: x.totais
     };
   }
 
   /* ---------------- parecer (texto para e-mail e PDF) ---------------- */
   function montarParecer(analise, ocorrencias, opcoes) {
-    const op = Object.assign({ saudacao: 'Bom dia!', intro: 'Segue abaixo análise da documentação em questão:', fechamento: 'Atenciosamente,', extras: {}, documentosAnalisados: (analise.resumo && analise.resumo.documentos) || [] }, opcoes || {});
+    const op = Object.assign({ saudacao: '', intro: '', fechamento: '', extras: {}, documentosAnalisados: (analise.resumo && analise.resumo.documentos) || [] }, opcoes || {});
     const sel = (ocorrencias || []).filter(o => o.incluir_pdf !== false && o.incluirPdf !== false);
     const secoes = [];
     SECOES.forEach(([doc, titulo]) => {
       const linhas = [];
       const vistos = new Set();
-      sel.filter(o => (o.documento || o.documento) === doc).forEach(o => { const t = String(o.texto || o.sugestao || o.mensagem || '').trim(); if (t && !vistos.has(t)) { vistos.add(t); linhas.push(t); } });
-      (op.extras[doc] || []).filter(Boolean).forEach(t => linhas.push(String(t).trim()));
+      sel.filter(o => o.documento === doc).forEach(o => { const t = String(o.texto || o.sugestao || o.mensagem || '').trim(); if (t && !vistos.has(t)) { vistos.add(t); linhas.push({ texto: t, pedido: o.pedido || pedidoDe(o), base: baseDe(o) }); } });
+      (op.extras[doc] || []).filter(Boolean).forEach(t => linhas.push({ texto: String(t).trim(), pedido: 'obs', base: null }));
       const analisado = op.documentosAnalisados.includes(doc) || (doc === 'catalogo' && (analise.resumo || {}).catalogo);
       if (linhas.length) secoes.push({ documento: doc, titulo, itens: linhas });
-      else if (analisado && doc !== 'relatorio' && doc !== 'processo') secoes.push({ documento: doc, titulo, itens: [doc === 'catalogo' ? 'Todos os itens estão publicados no Catálogo de Produtos.' : 'Documento em conformidade.'] });
+      else if (analisado && doc !== 'relatorio' && doc !== 'processo') secoes.push({ documento: doc, titulo, itens: [{ texto: doc === 'catalogo' ? 'Todos os itens estão publicados no Catálogo de Produtos, sem divergências.' : 'Documento em conformidade.', pedido: 'ok', base: null }] });
     });
     const fecha = (t, ult) => t.replace(/[;.:\s]+$/, '') + (ult ? '.' : ';');
-    const texto = [op.saudacao, '', op.intro, ''].concat(...secoes.map(s => [`# ${s.titulo}`, ...s.itens.map((t, i) => `  •  ${fecha(t, i === s.itens.length - 1)}`), ''])).concat(op.observacoes ? ['Observações:', op.observacoes, ''] : []).concat([op.fechamento]).join('\n');
+    const ROT = { ajustar: 'AJUSTAR', validar: 'VALIDAR', ok: 'OK', obs: 'OBS.' };
+    const texto = [op.saudacao, op.saudacao ? '' : null, op.intro, op.intro ? '' : null].filter(v => v != null).concat(...secoes.map(s => [`# ${s.titulo}`, ...s.itens.map((t, i) => `  •  ${ROT[t.pedido] ? ROT[t.pedido] + ': ' : ''}${fecha(t.texto, i === s.itens.length - 1)}${t.base ? ` (Base: ${t.base})` : ''}`), ''])).concat(op.observacoes ? ['Observações:', op.observacoes, ''] : []).concat(op.fechamento ? [op.fechamento] : []).join('\n');
     return { secoes, texto };
   }
+  const pedidoDe = o => (o && VALIDAR.has(o.regra)) ? 'validar' : 'ajustar';
+  const baseDe = o => { const b = String((o && (o.base || o.base_legal)) || '').trim(); return !b || /^(Controle interno|Conferência)/i.test(b) ? POP : b; };
 
-  REGRAS.forEach(r => { r.interna = INTERNAS.has(r.codigo) || r.documento === 'relatorio' || r.documento === 'diferimento'; });
-  C.regras = { REGRAS, MAPA, DOCS, COM_ARTIGO, SECOES, ACOES, PESO_SEV, VERSAO_MOTOR, analisar, montarParecer, fmtCnpj, incluirPorPadrao, fecha: (t, ult) => String(t).replace(/[;.:\s]+$/, '') + (ult ? '.' : ';') };
+  REGRAS.forEach(r => { r.interna = INTERNAS.has(r.codigo) || r.documento === 'relatorio'; });
+  C.regras = { REGRAS, MAPA, DOCS, COM_ARTIGO, SECOES, ACOES, PESO_SEV, VERSAO_MOTOR, POP, LIM, analisar, montarParecer, pedidoDe, baseDe, fmtCnpj, incluirPorPadrao, fecha: (t, ult) => String(t).replace(/[;.:\s]+$/, '') + (ult ? '.' : ';') };
   C.analisar = analisar;
 })(typeof self !== 'undefined' ? self : this);

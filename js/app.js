@@ -276,7 +276,7 @@
         ${u ? `<div class="sm">Última: <a href="#a-${u.id}">análise nº ${u.numero}</a> · ${dataHora(u.criado_em)} · ${esc(u.analista_nome)}</div><div style="margin:6px 0">${chipsResumo(u.resumo)} ${u.decisao ? (u.decisao === 'seguir' ? '<span class="badge sev-ok">Seguir</span>' : '<span class="badge sev-bloqueante">Não seguir</span>') : '<span class="badge">decisão pendente</span>'}</div>` : '<div class="sm mut" style="margin:6px 0">Ainda não analisada.</div>'}
         <div class="acts"><button class="bt${u ? '2' : ''}" data-rodar="${fz}">${u ? 'Rodar com novos documentos' : 'Rodar fase'}</button>${u ? `<button class="bt" data-rean="${fz}" title="Mesmos documentos da última análise, com o catálogo e as regras atuais">Reanalisar</button>` : ''}</div></div>`; }).join('')}</div>
       <div class="card"><h2>Análises</h2><p class="cs">Cada análise guarda os documentos usados, o catálogo vigente na data e quem a realizou.</p>
-      ${anals.length ? `<div class="tbw"><table class="tb"><thead><tr><th>Nº</th><th>Fase</th><th>Data</th><th>Analista</th><th>Resultado</th><th>Decisão</th><th>PDF</th></tr></thead><tbody>${anals.map(a => `<tr class="cl" data-a="${a.id}"><td><b>${a.numero}</b></td><td>${FASES[a.fase]}</td><td>${dataHora(a.criado_em)}</td><td>${esc(a.analista_nome)}</td><td>${chipsResumo(a.resumo)}</td><td>${a.decisao ? (a.decisao === 'seguir' ? '<span class="badge sev-ok">Seguir</span>' : '<span class="badge sev-bloqueante">Não seguir</span>') : '<span class="mut sm">pendente</span>'}</td><td>${a.pdf_path ? `<button class="bt3" data-pdf="${esc(a.pdf_path)}">baixar</button>` : '<span class="mut sm">—</span>'}</td></tr>`).join('')}</tbody></table></div>` : '<div class="empty">Nenhuma análise ainda.</div>'}</div>
+      ${anals.length ? `<div class="tbw"><table class="tb"><thead><tr><th>Nº</th><th>Fase</th><th>Data</th><th>Analista</th><th>Resultado</th><th>Decisão</th><th>PDF para o cliente</th></tr></thead><tbody>${anals.map(a => `<tr class="cl" data-a="${a.id}"><td><b>${a.numero}</b></td><td>${FASES[a.fase]}</td><td>${dataHora(a.criado_em)}</td><td>${esc(a.analista_nome)}</td><td>${chipsResumo(a.resumo)}</td><td>${a.decisao ? (a.decisao === 'seguir' ? '<span class="badge sev-ok">Seguir</span>' : '<span class="badge sev-bloqueante">Não seguir</span>') : '<span class="mut sm">pendente</span>'}</td><td style="white-space:nowrap"><button class="bt3" data-gpdf="${a.id}" title="Montar o PDF para o cliente">${a.pdf_path ? 'refazer' : 'gerar'}</button>${a.pdf_path ? ` <button class="bt3" data-pdf="${esc(a.pdf_path)}">baixar</button>` : ''}</td></tr>`).join('')}</tbody></table></div>` : '<div class="empty">Nenhuma análise ainda.</div>'}</div>
       <div class="card"><h2>Documentos enviados</h2>${docs.length ? `<table class="tb"><thead><tr><th>Tipo</th><th>Arquivo</th><th>Enviado por</th><th>Data</th><th></th></tr></thead><tbody>${docs.map(d => `<tr><td>${esc(TIPOS[d.tipo] || d.tipo)}</td><td>${esc(d.arquivo_nome)}</td><td>${esc(nomeUsuario(d.enviado_por))}</td><td>${dataHora(d.enviado_em)}</td><td>${d.storage_path ? `<button class="bt3" data-doc="${esc(d.storage_path)}" data-nome="${esc(d.arquivo_nome)}">baixar</button>` : ''}</td></tr>`).join('')}</tbody></table>` : '<div class="empty">Nenhum documento.</div>'}</div>
       ${als.length ? `<div class="card"><h2>Histórico de alertas</h2><table class="tb"><thead><tr><th>Data</th><th>Código interno</th><th>Mudança</th><th>Status</th></tr></thead><tbody>${als.map(a => `<tr><td>${dataHora(a.criado_em)}</td><td class="mono">${esc(a.codigo_interno)}</td><td>${esc(ncmTexto(a.mensagem))}</td><td>${a.status === 'aberto' ? '<span class="badge sev-alerta">aberto</span>' : `<span class="badge sev-ok">resolvido</span><div class="sm mut">${esc(nomeUsuario(a.resolvido_por))} · ${esc(a.nota || '')}</div>`}</td></tr>`).join('')}</tbody></table></div>` : ''}`;
     $('#bNova').onclick = () => { location.hash = 'nova-' + p.id; };
@@ -305,6 +305,7 @@
       const rd = e.target.closest('[data-rodar]'); if (rd) { location.hash = 'nova-' + p.id + '~' + rd.dataset.rodar; return; }
       const ra = e.target.closest('[data-rean]'); if (ra) return rean([ra.dataset.rean]);
       const pdf = e.target.closest('[data-pdf]'); if (pdf) { e.stopPropagation(); return baixarArquivo(pdf.dataset.pdf, pdf.dataset.pdf.split('/').pop()); }
+      const gp = e.target.closest('[data-gpdf]'); if (gp) { e.stopPropagation(); location.hash = 'a-' + gp.dataset.gpdf + '-pdf'; return; }
       const d = e.target.closest('[data-doc]'); if (d) return baixarArquivo(d.dataset.doc, d.dataset.nome);
       const tr = e.target.closest('tr[data-a]'); if (tr) location.hash = 'a-' + tr.dataset.a;
     };
@@ -739,8 +740,8 @@
     });
   }
   async function vAnalise(arg) {
-    const nova = arg.endsWith('-nova');
-    const id = arg.replace(/-nova$/, '');
+    const nova = arg.endsWith('-nova'), abrirPdf = arg.endsWith('-pdf');
+    const id = arg.replace(/-(nova|pdf)$/, '');
     const [a] = await dados(sb.from('confere_analises').select('*').eq('id', id));
     if (!a) { view().innerHTML = '<div class="card empty">Análise não encontrada.</div>'; return; }
     const [[p], ocs] = await Promise.all([dados(sb.from('confere_processos').select('*').eq('id', a.processo_id)), todos(() => sb.from('confere_ocorrencias').select('*').eq('analise_id', id).order('criado_em'))]);
@@ -749,7 +750,7 @@
     const pend = ocs.filter(o => o.status !== 'substituida' && o.severidade !== 'info');
     view().innerHTML = `<div class="top"><div><div class="eb">Análise nº ${a.numero} · ${FASES[a.fase]}</div><h1 class="tt">IP ${esc(p.ref_cliente)} <span>${esc(p.ref_agil || '')}</span></h1>
       <div class="sub">${dataHora(a.criado_em)} · por <b>${esc(a.analista_nome)}</b> · catálogo ${r.resumo && r.resumo.catalogo ? `de ${dataHora(r.resumo.catalogo.geradoEm)}` : 'não carregado'} · motor ${esc(r.versaoMotor || '')}<br>${esc(docsTxt)}</div></div>
-      <div class="acts"><button class="bt" id="bPdf">Emitir parecer (PDF)</button><button class="bt2" id="bTxt">Copiar texto do parecer</button><button class="bt2" onclick="location.hash='p-${p.id}'">Abrir processo</button><button class="bt2" onclick="location.hash='nova-${p.id}'">Nova análise</button></div></div>
+      <div class="acts"><button class="bt" id="bPdf">PDF para o cliente</button><button class="bt2" id="bTxt">Copiar texto</button><button class="bt2" onclick="location.hash='p-${p.id}'">Abrir processo</button><button class="bt2" onclick="location.hash='nova-${p.id}'">Nova análise</button></div></div>
       <div id="decisao"></div>
       <div class="kpis"><div class="kpi"><b>${rs.bloqueantes || 0}</b><span>Bloqueantes</span></div><div class="kpi"><b>${rs.alertas || 0}</b><span>Alertas</span></div><div class="kpi"><b>${rs.infos || 0}</b><span>Informativos</span></div><div class="kpi"><b>${rs.itens || 0}</b><span>Itens conferidos${rs.itensComPendencia ? ` (${rs.itensComPendencia} com pendência)` : ''}</span></div></div>
       <div class="tabs2"><button class="on" data-t="oc">Ocorrências (${ocs.length})</button><button data-t="it">Itens (${(r.itens || []).length})</button><button data-t="ct">Catálogo</button><button data-t="dc">Documentos lidos</button></div>
@@ -772,7 +773,7 @@
       const l = ocs.filter(o => (!filtros.sev || o.severidade === filtros.sev) && (!filtros.so || !o.decisao));
       const grupos = R.SECOES.map(([k, t]) => [k, t, l.filter(o => o.documento === k)]).filter(g => g[2].length);
       $('#tOc').innerHTML = `<div class="acts" style="margin-bottom:6px"><select class="in" id="fSev" style="max-width:190px"><option value="">Todas as severidades</option><option value="bloqueante">Bloqueantes</option><option value="alerta">Alertas</option><option value="info">Informativos</option></select><label class="sm"><input type="checkbox" id="fSo" ${filtros.so ? 'checked' : ''}> só sem decisão</label></div>` +
-        (grupos.length ? grupos.map(([k, t, g]) => `<div class="grp-doc">${esc(t)}</div>` + g.map(o => cartaoOcorrencia(o, o.status === 'substituida' ? '<span class="badge" style="background:#eee;color:#777">substituída por análise mais nova</span>' : '')).join('')).join('') : '<div class="empty">Nenhuma ocorrência com estes filtros.</div>');
+        (grupos.length ? grupos.map(([k, t, g]) => `<div class="grp-doc">${esc(t)}</div>` + g.map(o => cartaoOcorrencia(o, o.status === 'substituida' ? '<span class="badge" style="background:#eee;color:#777">substituída por análise mais nova</span>' : '')).join('')).join('') : '<div class="empty">Nenhuma ocorrência com estes filtros.</div>') + quadroTotais(r.totais);
       $('#fSev').value = filtros.sev;
       $('#fSev').onchange = () => { filtros.sev = $('#fSev').value; desenharOc(); };
       $('#fSo').onchange = () => { filtros.so = $('#fSo').checked; desenharOc(); };
@@ -782,11 +783,11 @@
     // itens
     const it = r.itens || [];
     const cel = (v, ref, fmtf) => { const s = v == null ? '—' : fmtf(v); return ref != null && v != null && String(v) !== String(ref) ? `<td class="num cel-dif">${s}</td>` : `<td class="num">${s}</td>`; };
-    $('#tIt').innerHTML = `<p class="cs">Conciliação por código interno (agrupando linhas do TXT e do relatório). Células em destaque divergem da referência. Clique numa linha para comparar descrições.</p><div class="tbw"><table class="tb"><thead><tr><th>Código</th><th>Status</th><th>NCM ref.</th><th>NCM invoice</th><th>NCM TXT</th><th>NCM relatório</th><th>Catálogo</th><th class="num">Qtd invoice</th><th class="num">Qtd TXT</th><th class="num">Valor invoice</th><th class="num">Valor TXT</th><th class="num">Peso líq. invoice</th><th class="num">Peso líq. TXT</th></tr></thead><tbody>${it.map((o, k) => {
-      const ref = o.ncmReferencia, ni = o.invoice ? o.invoice.ncms.join('/') : null, nt = o.txt ? o.txt.ncms.join('/') : null, nr = o.relatorio ? o.relatorio.ncms.join('/') : null;
-      const c = o.catalogo;
-      const catTxt = !c ? '—' : c.status === 'nao_encontrado' ? '<span class="badge sev-bloqueante">não cadastrado</span>' : c.status === 'desativado' ? '<span class="badge sev-bloqueante">desativado</span>' : `${c.status === 'multiplos' ? '<span class="badge sev-alerta">' + c.ativos.length + ' ativos</span> ' : ''}${esc(c.produto.codigo)} v${esc(c.produto.versao)} · ${U.fmtNcm(c.produto.ncm)}`;
-      return `<tr class="cl" data-k="${k}"><td class="mono"><b>${esc(o.codigo)}</b></td><td><span class="dot ${o.status}"></span></td><td>${U.fmtNcm(ref)}</td>${[ni, nt, nr].map(n => n == null ? '<td class="mut">—</td>' : `<td class="${n !== ref ? 'cel-blq' : ''}">${esc(n.split('/').map(U.fmtNcm).join(' / '))}</td>`).join('')}<td>${catTxt}</td>
+    const ncmTd = (lista, cat) => !lista || !lista.length ? '<td class="mut">—</td>' : `<td class="${cat && lista.some(n => n !== cat) ? 'cel-blq' : ''}">${esc(lista.map(U.fmtNcm).join(' / '))}</td>`;
+    $('#tIt').innerHTML = `<p class="cs">Conciliação por código interno (linhas do mesmo código somadas). A NCM do Catálogo de Produtos é a que vale no registro da DUIMP: em vermelho, o documento que diverge dele. Quantidade, valor e peso em destaque diferem da invoice. Clique numa linha para comparar descrições.</p><div class="tbw"><table class="tb"><thead><tr><th>Código</th><th>Status</th><th>Catálogo (produto · NCM)</th><th>NCM invoice</th><th>NCM TXT</th><th>NCM planilha diferimento</th><th class="num">Qtd invoice</th><th class="num">Qtd TXT</th><th class="num">Valor invoice</th><th class="num">Valor TXT</th><th class="num">Peso líq. invoice</th><th class="num">Peso líq. TXT</th></tr></thead><tbody>${it.map((o, k) => {
+      const c = o.catalogo, ncmCat = o.ncmCatalogo || (c && c.produto ? c.produto.ncm : null);
+      const catTxt = !c ? '—' : c.status === 'nao_encontrado' ? '<span class="badge sev-bloqueante">não cadastrado</span>' : c.status === 'desativado' ? '<span class="badge sev-bloqueante">desativado</span>' : `${c.status === 'multiplos' ? '<span class="badge sev-alerta">' + c.ativos.length + ' ativos</span> ' : ''}${esc(c.produto.codigo)} v${esc(c.produto.versao)} · <b>${U.fmtNcm(c.produto.ncm)}</b>`;
+      return `<tr class="cl" data-k="${k}"><td class="mono"><b>${esc(o.codigo)}</b></td><td><span class="dot ${o.status}"></span></td><td>${catTxt}</td>${ncmTd(o.invoice && o.invoice.ncms, ncmCat)}${ncmTd(o.txt && o.txt.ncms, ncmCat)}${ncmTd(o.diferimento && o.diferimento.ncms, ncmCat)}
         ${cel(o.invoice && o.invoice.qtd, null, v => U.fmtAuto(v, 5))}${o.txt ? `<td class="num ${o.invoice && !U.iguais(o.txt.qtd, o.invoice.qtd, 5) ? 'cel-dif' : ''}">${U.fmtAuto(o.txt.qtd, 5)}</td>` : '<td class="mut">—</td>'}
         ${cel(o.invoice && o.invoice.total, null, v => U.fmt(v))}${o.txt ? `<td class="num ${o.invoice && !U.iguais(o.txt.valor, o.invoice.total, 2) ? 'cel-dif' : ''}">${U.fmt(o.txt.valor)}</td>` : '<td class="mut">—</td>'}
         ${cel(o.invoice && o.invoice.pesoLiq, null, v => U.fmt(v, 2))}${o.txt ? `<td class="num ${o.invoice && !U.iguais(o.txt.pesoLiq, o.invoice.pesoLiq, 2) ? 'cel-dif' : ''}">${U.fmt(o.txt.pesoLiq, 4)}</td>` : '<td class="mut">—</td>'}</tr>`;
@@ -825,11 +826,24 @@
     desenharCat();
     $$('.tabs2 button').forEach(b => b.onclick = () => { $$('.tabs2 button').forEach(x => x.classList.toggle('on', x === b)); ['oc', 'it', 'ct', 'dc'].forEach(t => $('#t' + t[0].toUpperCase() + t[1]).classList.toggle('hide', b.dataset.t !== t)); });
     $('#bPdf').onclick = () => editorParecer(a, p, ocs);
-    $('#bTxt').onclick = () => copiar(R.montarParecer(r, ocs.filter(o => o.status !== 'substituida' && o.incluir_pdf).map(o => ({ documento: o.documento, texto: o.texto_pdf || o.sugestao })), Object.assign({}, a.parecer || {}, { documentosAnalisados: (rs.documentos || []) })).texto);
+    $('#bTxt').onclick = () => { const pr = a.parecer || {}, pd = pr.pedidos || {}; copiar(R.montarParecer(r, ocs.filter(o => o.status !== 'substituida' && o.incluir_pdf).map(o => ({ documento: o.documento, texto: o.texto_pdf || o.sugestao, pedido: pd[o.id] || R.pedidoDe(o), base: o.base_legal, regra: o.regra })), Object.assign({}, pr, { documentosAnalisados: (rs.documentos || []) })).texto); };
     if (nova && pend.length && !a.decisao) {
       history.replaceState(null, '', '#a-' + a.id);
       modal({ titulo: 'Divergências encontradas', corpo: `<p>A análise encontrou <b>${rs.bloqueantes || 0} bloqueante(s)</b>, <b>${rs.alertas || 0} alerta(s)</b> e ${rs.infos || 0} informativo(s).</p><p class="sm mut">Trate cada ocorrência (ação e seguir/não seguir) e registre a decisão do processo. Você pode decidir agora ou depois.</p>`, botoes: [{ txt: 'Ver ocorrências', cls: 'bt2' }, { txt: 'Não seguir', cls: 'bt er', acao: () => { decidir('nao_seguir'); } }, { txt: 'Seguir com ressalvas', cls: 'bt ok', acao: () => { decidir('seguir'); } }] });
     } else if (nova) history.replaceState(null, '', '#a-' + a.id);
+    if (abrirPdf) { history.replaceState(null, '', '#a-' + a.id); editorParecer(a, p, ocs); }
+  }
+  // totais confrontados: o TXT manda (registro da DUIMP); diferença até o limite é arredondamento
+  function quadroTotais(t) {
+    if (!t || !t.linhas || !t.linhas.length) return '';
+    const NOMES = { txt: 'TXT', invoice: 'Invoice', packing: 'Packing list', bl: 'HBL' };
+    const docs = t.documentos;
+    const f = (l, v) => v == null ? '—' : l.chave === 'qtd' ? U.fmtAuto(v, 5) : l.chave === 'volumes' ? U.fmtAuto(v, 0) : U.fmt(v, l.unidade === 'kg' ? 4 : 2);
+    return `<div class="card" style="margin-top:14px"><h2>Totais confrontados</h2><p class="cs">${t.referencia === 'txt' ? 'O TXT é a referência para o registro da DUIMP.' : 'Sem TXT nesta fase: a referência é a invoice.'} Diferenças até US$ 1,00 no valor e até 1 kg nos pesos são tratadas como arredondamento e não geram ocorrência.</p>
+      <div class="tbw"><table class="tb"><thead><tr><th>Total</th>${docs.map(d => `<th class="num">${NOMES[d]}${d === t.referencia ? ' (ref.)' : ''}</th>`).join('')}<th>Situação</th></tr></thead><tbody>${t.linhas.map(l => {
+        const ruins = Object.entries(l.porDoc).filter(([, r]) => !r.ok);
+        return `<tr><td><b>${esc(l.nome)}</b></td>${docs.map(d => { const r = l.porDoc[d]; return !r ? '<td class="num mut">—</td>' : `<td class="num ${r.ok ? '' : 'cel-blq'}" title="${r.dif ? 'diferença ' + f(l, r.dif) : ''}">${f(l, r.valor)}${r.dif && Math.abs(r.dif) > 1e-9 && d !== l.base ? `<div class="sm ${r.ok ? 'mut' : ''}">${r.dif > 0 ? '+' : ''}${f(l, r.dif)}</div>` : ''}</td>`; }).join('')}<td>${ruins.length ? `<span class="badge sev-alerta">diferença em ${ruins.map(([d]) => NOMES[d]).join(', ')}</span>` : '<span class="badge" style="background:#e6f6ec;color:#1f9d55">confere</span>'}</td></tr>`;
+      }).join('')}</tbody></table></div></div>`;
   }
   function marcarTokens(texto, toks, cls) {
     let h = esc(texto);
@@ -845,7 +859,7 @@
       titulo: 'Descrições · ' + o.codigo, largo: true,
       corpo: `${cf ? `<p class="sm">Semelhança invoice × catálogo: <b>${Math.round(cf.similaridade * 100)}%</b>${ct && ct.comFatura ? ` · TXT × invoice: <b>${Math.round(ct.comFatura.similaridade * 100)}%</b>` : ''}${ct && ct.comCatalogo ? ` · TXT × catálogo: <b>${Math.round(ct.comCatalogo.similaridade * 100)}%</b>` : ''}</p>` : ''}
       <div class="cmp">${bloco('Invoice', inv ? marcarTokens(inv, cf && cf.faltamNoCatalogo, 'f') : null)}${bloco(`Catálogo ${o.catalogo && o.catalogo.produto ? `(produto ${esc(o.catalogo.produto.codigo)} v${esc(o.catalogo.produto.versao)})` : ''}`, cat ? marcarTokens(cat, cf && cf.faltamNaFatura, 'c') : null)}
-      ${bloco('TXT (TOTVS)', txt ? esc(txt) : null)}${bloco('Relatório de itens', rel ? esc(rel) : null)}</div>
+      ${bloco('TXT (TOTVS)', txt ? esc(txt) : null)}${bloco('Planilha de validação do diferimento', o.diferimento && o.diferimento.descricao ? esc(o.diferimento.descricao) : null)}</div>
       ${cf ? `<div style="margin-top:12px"><div class="sm b">Informações sensíveis da invoice que não estão no catálogo</div>${toks(cf.faltamNoCatalogo, 'f')}<div class="sm b" style="margin-top:8px">Informações do catálogo que não estão na invoice</div>${toks(cf.faltamNaFatura, 'c')}</div>` : ''}`,
       botoes: [{ txt: 'Fechar' }]
     });
@@ -854,32 +868,33 @@
   /* ---------------- editor do parecer (PDF) ---------------- */
   function editorParecer(a, p, ocs) {
     const r = a.resultado || {}, rs = a.resumo || {};
-    const pr = Object.assign({ saudacao: 'Bom dia!', intro: 'Segue abaixo análise da documentação em questão:', observacoes: '', fechamento: 'Atenciosamente,', assinatura: a.analista_nome || EU.nome, extras: {}, detalhamento: true }, a.parecer || {});
-    const lista = ocs.filter(o => o.status !== 'substituida').map(o => ({ id: o.id, documento: o.documento, incluir: !!o.incluir_pdf, texto: o.texto_pdf || o.sugestao || o.mensagem, sev: o.severidade, interna: o.interna, item: o.item, campo: o.campo, encontrado: o.encontrado, esperado: o.esperado, original: { incluir: !!o.incluir_pdf, texto: o.texto_pdf } }));
+    const INTRO = 'Seguem os pontos identificados na análise documental deste processo, organizados por documento. AJUSTAR indica que o documento precisa ser corrigido; VALIDAR indica que precisamos da confirmação da informação antes do registro.';
+    const pr = Object.assign({ saudacao: '', intro: INTRO, observacoes: '', fechamento: '', assinatura: a.analista_nome || EU.nome, extras: {}, detalhamento: false, pedidos: {} }, a.parecer || {});
+    if (!pr.pedidos) pr.pedidos = {};
+    const lista = ocs.filter(o => o.status !== 'substituida').map(o => ({ id: o.id, regra: o.regra, documento: o.documento, incluir: !!o.incluir_pdf, texto: o.texto_pdf || o.sugestao || o.mensagem, pedido: pr.pedidos[o.id] || R.pedidoDe(o), base: o.base_legal, sev: o.severidade, interna: o.interna, item: o.item, campo: o.campo, encontrado: o.encontrado, esperado: o.esperado, original: { incluir: !!o.incluir_pdf, texto: o.texto_pdf } }));
     const RAPIDOS = { ce: ['CE ainda não foi desconsolidado.', 'CE em conformidade.'], catalogo: ['Estamos realizando o cadastro dos itens e do fabricante; assim que finalizarmos, notificaremos.'] };
     const bl09 = ocs.find(o => o.regra === 'BL-09' && o.status !== 'substituida');
     if (bl09) RAPIDOS.ce.unshift(`Notar que faltou incluir a(s) NCM(s) ${String(bl09.sugestao || '').match(/NCM\(s\) ([\d, ]+)/) ? String(bl09.sugestao).match(/NCM\(s\) ([\d, ]+)/)[1].trim() : ''} no CE.`);
     const secoes = R.SECOES.filter(([k]) => k !== 'processo' || lista.some(o => o.documento === 'processo'));
     const corpo = `<div class="pdfed"><div>
-      <div class="row r2"><div><label class="f">Saudação</label><input class="in" id="pSa" value="${esc(pr.saudacao)}"></div><div><label class="f">Assinatura</label><input class="in" id="pAs" value="${esc(pr.assinatura)}"></div></div>
-      <label class="f">Introdução</label><input class="in" id="pIn" value="${esc(pr.intro)}" style="margin-bottom:12px">
-      ${secoes.map(([k, t]) => `<div class="sec" data-sec="${k}"><h4># ${esc(t)}</h4>${lista.filter(o => o.documento === k).map(o => `<div class="li ${o.incluir ? '' : 'off'}" data-li="${o.id}"><input type="checkbox" ${o.incluir ? 'checked' : ''} title="Incluir no parecer"><textarea class="in">${esc(o.texto)}</textarea></div>`).join('') || ''}
+      <label class="f">Introdução do PDF</label><textarea class="in" id="pIn" style="margin-bottom:12px">${esc(pr.intro)}</textarea>
+      ${secoes.map(([k, t]) => `<div class="sec" data-sec="${k}"><h4># ${esc(t)}</h4>${lista.filter(o => o.documento === k).map(o => `<div class="li ${o.incluir ? '' : 'off'}" data-li="${o.id}"><input type="checkbox" ${o.incluir ? 'checked' : ''} title="Incluir no PDF"><select class="in" style="max-width:104px;padding:4px" title="O que se pede ao cliente"><option value="ajustar" ${o.pedido === 'ajustar' ? 'selected' : ''}>Ajustar</option><option value="validar" ${o.pedido === 'validar' ? 'selected' : ''}>Validar</option></select><textarea class="in">${esc(o.texto)}</textarea></div>`).join('') || ''}
         <div class="ex">${(pr.extras[k] || []).map(t => `<div class="li" data-ex><input type="checkbox" checked><textarea class="in">${esc(t)}</textarea></div>`).join('')}</div>
         <div class="acts"><button class="bt3" data-add="${k}">+ observação</button>${(RAPIDOS[k] || []).map(t => `<button class="bt3" data-rap="${k}" data-t="${esc(t)}">+ “${esc(t.length > 48 ? t.slice(0, 46) + '…' : t)}”</button>`).join('')}</div></div>`).join('')}
       <label class="f">Observações adicionais</label><textarea class="in" id="pOb" placeholder="Ex.: taxas consideradas, valores em BRL/USD, prazos">${esc(pr.observacoes)}</textarea>
-      <div class="row r2" style="margin-top:10px"><div><label class="f">Fechamento</label><input class="in" id="pFe" value="${esc(pr.fechamento)}"></div><div><label class="f">Anexo</label><label class="sm"><input type="checkbox" id="pDet" ${pr.detalhamento ? 'checked' : ''}> Incluir “Detalhamento por item” no PDF</label></div></div>
+      <div class="row r2" style="margin-top:10px"><div><label class="f">Fechamento (opcional)</label><input class="in" id="pFe" value="${esc(pr.fechamento)}" placeholder="Ex.: Ficamos à disposição."></div><div><label class="f">Anexo</label><label class="sm"><input type="checkbox" id="pDet" ${pr.detalhamento ? 'checked' : ''}> Incluir “Detalhamento por item” no PDF</label></div></div>
       </div><div><div class="sm mut" style="margin-bottom:6px">Prévia do texto (o PDF segue a identidade visual da Ágil)</div><div class="prev" id="pPrev"></div></div></div>`;
     const m = modal({ titulo: `Parecer · IP ${p.ref_cliente} · análise nº ${a.numero}`, corpo, largo: true, botoes: [{ txt: 'Fechar' }, { txt: 'Copiar texto', cls: 'bt2', acao: async () => { await salvar(false); copiar(montar().texto); return false; } }, { txt: 'Salvar', cls: 'bt2', acao: async () => { await salvar(false); toast('Parecer salvo.'); return false; } }, { txt: 'Gerar PDF', cls: 'bt', acao: async (f) => { await salvar(true); return false; } }] });
     const f = m.el;
     const ler = () => {
-      $$('[data-li]', f).forEach(el => { const o = lista.find(x => x.id === el.dataset.li); o.incluir = $('input', el).checked; o.texto = $('textarea', el).value; el.classList.toggle('off', !o.incluir); });
+      $$('[data-li]', f).forEach(el => { const o = lista.find(x => x.id === el.dataset.li); o.incluir = $('input', el).checked; o.texto = $('textarea', el).value; o.pedido = $('select', el).value; if (o.pedido !== R.pedidoDe(o)) pr.pedidos[o.id] = o.pedido; else delete pr.pedidos[o.id]; el.classList.toggle('off', !o.incluir); });
       const extras = {};
       $$('[data-sec]', f).forEach(s => { extras[s.dataset.sec] = $$('[data-ex]', s).filter(el => $('input', el).checked).map(el => $('textarea', el).value.trim()).filter(Boolean); });
-      Object.assign(pr, { saudacao: $('#pSa', f).value, intro: $('#pIn', f).value, observacoes: $('#pOb', f).value, fechamento: $('#pFe', f).value, assinatura: $('#pAs', f).value, extras, detalhamento: $('#pDet', f).checked });
+      Object.assign(pr, { intro: $('#pIn', f).value, observacoes: $('#pOb', f).value, fechamento: $('#pFe', f).value, extras, detalhamento: $('#pDet', f).checked });
     };
     const montar = () => {
       ler();
-      return R.montarParecer(r, lista.filter(o => o.incluir).map(o => ({ documento: o.documento, texto: o.texto })), { saudacao: pr.saudacao, intro: pr.intro, observacoes: pr.observacoes, fechamento: pr.fechamento + (pr.assinatura ? '\n' + pr.assinatura : ''), extras: pr.extras, documentosAnalisados: rs.documentos || [] });
+      return R.montarParecer(r, lista.filter(o => o.incluir).map(o => ({ documento: o.documento, texto: o.texto, pedido: o.pedido, base: o.base, regra: o.regra })), { saudacao: pr.saudacao, intro: pr.intro, observacoes: pr.observacoes, fechamento: pr.fechamento, extras: pr.extras, documentosAnalisados: rs.documentos || [] });
     };
     const ajusta = el => { el.style.height = 'auto'; el.style.height = Math.min(el.scrollHeight + 2, 220) + 'px'; };
     const prev = () => { $('#pPrev', f).textContent = montar().texto; };
@@ -903,23 +918,32 @@
       const par = montar();
       const mud = lista.filter(o => o.incluir !== o.original.incluir || o.texto !== (o.original.texto || ''));
       for (const o of mud) { await dados(sb.from('confere_ocorrencias').update({ incluir_pdf: o.incluir, texto_pdf: o.texto }).eq('id', o.id)); o.original = { incluir: o.incluir, texto: o.texto }; const oc = ocs.find(x => x.id === o.id); if (oc) { oc.incluir_pdf = o.incluir; oc.texto_pdf = o.texto; } }
-      const parecer = { saudacao: pr.saudacao, intro: pr.intro, observacoes: pr.observacoes, fechamento: pr.fechamento, assinatura: pr.assinatura, extras: pr.extras, detalhamento: pr.detalhamento, secoes: par.secoes };
+      const parecer = { saudacao: pr.saudacao, intro: pr.intro, observacoes: pr.observacoes, fechamento: pr.fechamento, assinatura: pr.assinatura, extras: pr.extras, detalhamento: pr.detalhamento, pedidos: pr.pedidos, secoes: par.secoes };
       await dados(sb.from('confere_analises').update({ parecer }).eq('id', a.id));
       a.parecer = parecer;
       if (!gerarPdf) return;
       const docRes = r.documentos || {};
       const inv = docRes.invoice || {};
       const sel = lista.filter(o => o.incluir);
-      const ajustes = par.secoes.reduce((s, x) => s + x.itens.filter(t => !/^(Documento em conformidade|Todos os itens estão publicados)/.test(t)).length, 0);
-      const nomesDocs = (rs.documentos || []).map(k => R.DOCS[k]).join(', ');
+      const pontos = par.secoes.flatMap(x => x.itens.filter(t => t.pedido === 'ajustar' || t.pedido === 'validar'));
+      const nAj = pontos.filter(t => t.pedido === 'ajustar').length, nVa = pontos.filter(t => t.pedido === 'validar').length;
+      const arquivos = (a.documentos || []).map(d => d.arquivo_nome).filter(Boolean);
+      const faseNome = a.fase === 'pre_alerta' ? 'Fase 1 · Pré-alerta' : 'Fase 3 · Pré-registro';
       const dadosPdf = {
         titulo: a.fase === 'pre_alerta' ? 'Análise prévia · pré-alerta' : 'Conferência para registro',
         subtitulo: `IP ${p.ref_cliente}${p.ref_agil ? ' · ' + p.ref_agil : ''} · Análise nº ${a.numero}`,
         refCurta: `IP ${p.ref_cliente} · nº ${a.numero}`,
-        campos: [['Importador', IMP.nome], ['CNPJ', R.fmtCnpj(IMP.cnpj)], ['Exportador', inv.exportador || p.exportador || '—'], ['Ref. cliente (IP)', p.ref_cliente], ['Ref. Ágil', p.ref_agil || '—'], ['Invoice', inv.numero || p.invoice || '—'], ['Incoterm · moeda', [inv.incoterm, inv.moeda].filter(Boolean).join(' · ') || '—'], ['Data da análise', dataHora(a.criado_em)], ['Analista', a.analista_nome], ['Catálogo de produtos', rs.catalogo ? 'versão de ' + dataHora(rs.catalogo.geradoEm) : 'não utilizado'], ['Documentos analisados', nomesDocs || '—'], ['Itens conferidos', String(rs.itens || 0)]],
-        totalAjustes: ajustes,
-        resumoLinha: ajustes ? `Pontos de ajuste em: ${listaDocs(par.secoes.filter(s => s.itens.some(t => !/^(Documento em conformidade|Todos os itens)/.test(t))).map(s => R.DOCS[s.documento] || s.titulo))}.` : 'Documentos analisados sem pontos de ajuste.',
-        saudacao: pr.saudacao, intro: pr.intro, secoes: par.secoes, observacoes: pr.observacoes, fechamento: pr.fechamento, assinatura: pr.assinatura,
+        campos: [['Importador', IMP.nome], ['CNPJ', R.fmtCnpj(IMP.cnpj)], ['Exportador', inv.exportador || p.exportador || '—'], ['Ref. cliente (IP)', p.ref_cliente], ['Ref. Ágil', p.ref_agil || '—'], ['Invoice', inv.numero || p.invoice || '—'], ['Incoterm · moeda', [inv.incoterm, inv.moeda].filter(Boolean).join(' · ') || '—'], ['Fase', faseNome], ['Catálogo de produtos', rs.catalogo ? 'versão de ' + dataHora(rs.catalogo.geradoEm) : 'não utilizado']],
+        totalAjustes: nAj + nVa,
+        pill: nAj + nVa ? [nAj ? `${nAj} ${nAj === 1 ? 'AJUSTE' : 'AJUSTES'}` : null, nVa ? `${nVa} ${nVa === 1 ? 'VALIDAÇÃO' : 'VALIDAÇÕES'}` : null].filter(Boolean).join(' · ') : null,
+        resumoLinha: nAj + nVa ? `Pontos em: ${listaDocs(par.secoes.filter(x => x.itens.some(t => t.pedido === 'ajustar' || t.pedido === 'validar')).map(x => R.DOCS[x.documento] || x.titulo))}.` : 'Documentos analisados sem pontos de ajuste.',
+        intro: pr.intro, secoes: par.secoes, observacoes: pr.observacoes, fechamento: pr.fechamento,
+        totais: r.totais || null,
+        rodape: [
+          `IP ${p.ref_cliente}${p.ref_agil ? '  ·  Ref. Ágil ' + p.ref_agil : ''}  ·  ${IMP.nome} (CNPJ ${R.fmtCnpj(IMP.cnpj)})  ·  ${faseNome}  ·  Análise nº ${a.numero}`,
+          `Realizada por ${a.analista_nome} em ${dataHora(a.criado_em)}  ·  PDF emitido por ${EU.nome || EU.email} em ${dataHora(new Date().toISOString())}`,
+          `Documentos analisados: ${arquivos.join('; ') || (rs.documentos || []).map(k => R.DOCS[k]).join(', ')}${rs.catalogo ? '; Catálogo de Produtos (' + rs.catalogo.arquivo + ')' : ''}`
+        ],
         detalhes: pr.detalhamento ? sel.filter(o => o.item && (o.encontrado || o.esperado)).map(o => ({ item: o.item, documento: R.DOCS[o.documento] || o.documento, campo: o.campo || '', encontrado: o.encontrado || '', esperado: o.esperado || '' })) : []
       };
       const blob = await window.ConferePDF.gerar(dadosPdf);

@@ -22,6 +22,7 @@
     .replace(/[\u3000-\u303f\u3400-\u9fff\uff00-\uffef]+/g, '[texto em chinês]')
     .replace(/≈/g, '~').replace(/→/g, '->').replace(/\u00a0/g, ' ');
 
+  const fmtN = (v, casas, corte) => { let c = casas; if (corte) { const t = Math.abs(v).toFixed(casas).replace(/0+$/, ''); const dec = (t.split('.')[1] || '').length; c = Math.max(2, dec); } return Number(v).toLocaleString('pt-BR', { minimumFractionDigits: casas === 5 || casas === 0 ? 0 : c, maximumFractionDigits: c }); };
   async function gerar(d) {
     const { jsPDF } = window.jspdf;
     const doc = new jsPDF({ unit: 'pt', format: 'a4', compress: true });
@@ -33,7 +34,7 @@
     doc.addFileToVFS('Mont-S.ttf', semi); doc.addFont('Mont-S.ttf', 'Mont', 'semibold');
     doc.addFileToVFS('Mont-B.ttf', bold); doc.addFont('Mont-B.ttf', 'Mont', 'bold');
     const W = doc.internal.pageSize.getWidth(), H = doc.internal.pageSize.getHeight();
-    const M = 44, LARG = W - 2 * M, TOPO2 = 92, LIMITE = H - 70;
+    const M = 44, LARG = W - 2 * M, TOPO2 = 92, LIMITE = H - 104;
     const fonte = (estilo, tam, cor) => { doc.setFont('Mont', estilo); doc.setFontSize(tam); doc.setTextColor(...(cor || COR.texto)); };
     const faixa = (y, h) => {
       const x1 = W * 0.24;
@@ -73,7 +74,7 @@
 
     // ---------- resultado ----------
     const ok = !d.totalAjustes;
-    const pill = ok ? 'EM CONFORMIDADE' : `${d.totalAjustes} ${d.totalAjustes === 1 ? 'PONTO DE AJUSTE' : 'PONTOS DE AJUSTE'}`;
+    const pill = ok ? 'EM CONFORMIDADE' : (d.pill || `${d.totalAjustes} ${d.totalAjustes === 1 ? 'PONTO DE AJUSTE' : 'PONTOS DE AJUSTE'}`);
     fonte('bold', 7.5, [255, 255, 255]);
     doc.setCharSpace(0.6);
     const pw = doc.getTextWidth(pill) + 20;
@@ -108,24 +109,61 @@
     if (d.saudacao) { paragrafo(d.saudacao, { estilo: 'semibold' }); y += 4; }
     if (d.intro) { paragrafo(d.intro); y += 10; }
 
-    // ---------- seções (# INVOICE, # HBL, ...) ----------
+    // ---------- seções por documento ----------
+    const TAG = { ajustar: ['AJUSTAR', COR.laranja], validar: ['VALIDAR', COR.azul], ok: ['OK', COR.verde], obs: ['OBS.', COR.mudo] };
     (d.secoes || []).forEach(s => {
       garante(46);
       doc.setFillColor(...COR.laranja); doc.rect(M, y - 7, 18, 2.6, 'F');
       fonte('bold', 11, COR.navy); doc.text(limpa(s.titulo), M + 26, y - 2);
-      y += 16;
-      s.itens.forEach((t, i) => {
+      y += 18;
+      s.itens.forEach((it, i) => {
+        const t = typeof it === 'string' ? { texto: it, pedido: 'obs' } : it;
         const ult = i === s.itens.length - 1;
-        const texto = limpa(t).replace(/[;.:\s]+$/, '') + (ult ? '.' : ';');
-        fonte('normal', 9.4, COR.texto);
-        const ls = doc.splitTextToSize(texto, LARG - 16);
-        garante(ls.length * 13 + 2);
-        doc.setFillColor(...COR.azul); doc.rect(M + 2, y - 6, 3.6, 3.6, 'F');
-        ls.forEach(l => { doc.text(l, M + 14, y); y += 13; });
-        y += 3;
+        const texto = limpa(t.texto).replace(/[;.:\s]+$/, '') + (ult ? '.' : ';');
+        const [rot, cor] = TAG[t.pedido] || TAG.obs;
+        const XT = M + 62;
+        fonte('normal', 9.2, COR.texto);
+        const ls = doc.splitTextToSize(texto, W - M - XT);
+        fonte('normal', 7.2, COR.mudo);
+        const lb = t.base ? doc.splitTextToSize(limpa('Base: ' + t.base), W - M - XT) : [];
+        garante(ls.length * 12.6 + lb.length * 9.5 + 6);
+        fonte('bold', 6.6, [255, 255, 255]); doc.setCharSpace(0.4);
+        doc.setFillColor(...cor); doc.roundedRect(M, y - 8.4, 54, 11.6, 5.8, 5.8, 'F');
+        doc.text(rot, M + 27, y - 0.6, { align: 'center' }); doc.setCharSpace(0);
+        fonte('normal', 9.2, COR.texto);
+        ls.forEach(l => { doc.text(l, XT, y); y += 12.6; });
+        if (lb.length) { fonte('normal', 7.2, COR.mudo); lb.forEach(l => { doc.text(l, XT, y - 2); y += 9.5; }); }
+        y += 5;
       });
-      y += 10;
+      y += 8;
     });
+
+    // ---------- totais confrontados ----------
+    const tt = d.totais;
+    if (tt && tt.linhas && tt.linhas.length) {
+      garante(90);
+      doc.setFillColor(...COR.laranja); doc.rect(M, y - 7, 18, 2.6, 'F');
+      fonte('bold', 11, COR.navy); doc.text('CONFERÊNCIA DE TOTAIS', M + 26, y - 2);
+      y += 12;
+      fonte('normal', 7.6, COR.cinza);
+      const nota = tt.referencia === 'txt' ? 'Referência: TXT, utilizado no registro da DUIMP. Diferenças de até US$ 1,00 no valor e até 1 kg nos pesos são consideradas arredondamento.' : 'Referência: invoice. Diferenças de até US$ 1,00 no valor e até 1 kg nos pesos são consideradas arredondamento.';
+      doc.splitTextToSize(nota, LARG).forEach(l => { doc.text(l, M, y); y += 10; });
+      y += 2;
+      const NOMES = { txt: 'TXT', invoice: 'Invoice', packing: 'Packing list', bl: 'HBL' };
+      const fm = (l, v) => v == null ? '—' : l.chave === 'qtd' ? fmtN(v, 5) : l.chave === 'volumes' ? fmtN(v, 0) : fmtN(v, l.unidade === 'kg' ? 4 : 2, true);
+      const corpo = tt.linhas.map(l => [l.nome].concat(tt.documentos.map(dc => { const r = l.porDoc[dc]; return r ? fm(l, r.valor) + (r.dif && Math.abs(r.dif) > 1e-9 && dc !== l.base ? `\n(${r.dif > 0 ? '+' : ''}${fm(l, r.dif)})` : '') : '—'; })).concat([Object.values(l.porDoc).every(r => r.ok) ? 'Confere' : 'Validar']));
+      doc.autoTable({
+        startY: y, margin: { left: M, right: M, top: TOPO2, bottom: 110 },
+        head: [['Total'].concat(tt.documentos.map(dc => NOMES[dc] + (dc === tt.referencia ? ' (ref.)' : ''))).concat(['Situação'])],
+        body: corpo.map(r => r.map(limpa)),
+        styles: { font: 'Mont', fontStyle: 'normal', fontSize: 7.6, cellPadding: 4, textColor: COR.texto, lineColor: COR.linha, lineWidth: 0.4, halign: 'right' },
+        headStyles: { font: 'Mont', fontStyle: 'bold', fillColor: COR.navy, textColor: [255, 255, 255], fontSize: 7.4, halign: 'right' },
+        columnStyles: { 0: { halign: 'left', fontStyle: 'semibold' } },
+        didParseCell: c => { if (c.section === 'body' && c.column.index === c.table.columns.length - 1) { c.cell.styles.halign = 'center'; c.cell.styles.fontStyle = 'bold'; c.cell.styles.textColor = c.cell.raw === 'Confere' ? COR.verde : COR.laranja; } if (c.section === 'head' && c.column.index === 0) c.cell.styles.halign = 'left'; },
+        didDrawPage: () => cabecalho2()
+      });
+      y = doc.lastAutoTable.finalY + 22;
+    }
 
     // ---------- observações ----------
     if (d.observacoes && d.observacoes.trim()) {
@@ -149,7 +187,7 @@
       fonte('bold', 11, COR.navy); doc.text('DETALHAMENTO POR ITEM', M + 26, y - 2);
       y += 10;
       doc.autoTable({
-        startY: y, margin: { left: M, right: M, top: TOPO2, bottom: 76 },
+        startY: y, margin: { left: M, right: M, top: TOPO2, bottom: 110 },
         head: [['Item', 'Documento', 'Campo', 'Encontrado', 'Esperado']],
         body: d.detalhes.map(r => [r.item, r.documento, r.campo, r.encontrado, r.esperado].map(limpa)),
         styles: { font: 'Mont', fontStyle: 'normal', fontSize: 7.4, cellPadding: 4, textColor: COR.texto, lineColor: COR.linha, lineWidth: 0.4, overflow: 'linebreak' },
@@ -162,23 +200,24 @@
     }
 
     // ---------- encerramento ----------
-    garante(70);
-    paragrafo(d.fechamento || 'Atenciosamente,');
-    y += 4;
-    paragrafo(d.assinatura || '', { estilo: 'bold', cor: COR.navy });
-    paragrafo('Ágil Soluções Aduaneiras', { cor: COR.cinza, tam: 8.8 });
+    if (d.fechamento && d.fechamento.trim()) { garante(30); paragrafo(d.fechamento); }
 
     // ---------- rodapé em todas as páginas ----------
     const total = doc.getNumberOfPages();
     for (let p = 1; p <= total; p++) {
       doc.setPage(p);
-      doc.setDrawColor(...COR.linha); doc.line(M, H - 50, W - M, H - 50);
-      fonte('normal', 7.4, COR.mudo);
-      doc.text('Ágil Soluções Aduaneiras  ·  comercial@agiladuaneira.com.br  ·  +55 85 3046.3003', M, H - 34);
+      doc.setDrawColor(...COR.linha); doc.line(M, H - 86, W - M, H - 86);
+      let yr = H - 74;
+      (d.rodape || []).forEach((t, i) => {
+        fonte(i === 0 ? 'semibold' : 'normal', 6.8, i === 0 ? COR.navy : COR.cinza);
+        doc.splitTextToSize(limpa(t), LARG - 50).slice(0, i === 1 ? 1 : 2).forEach(l => { doc.text(l, M, yr); yr += 8.6; });
+      });
+      fonte('normal', 6.6, COR.mudo);
+      doc.text('Ágil Soluções Aduaneiras  ·  comercial@agiladuaneira.com.br  ·  +55 85 3046.3003', M, H - 20);
       fonte('bold', 8.6, COR.navy);
       const pn = `${String(p).padStart(2, '0')} / ${String(total).padStart(2, '0')}`;
-      doc.text(pn, W - M, H - 34, { align: 'right' });
-      doc.setFillColor(...COR.laranja); doc.rect(W - M - doc.getTextWidth(pn) - 13, H - 40.5, 7, 7, 'F');
+      doc.text(pn, W - M, H - 20, { align: 'right' });
+      doc.setFillColor(...COR.laranja); doc.rect(W - M - doc.getTextWidth(pn) - 13, H - 26.5, 7, 7, 'F');
       faixa(H - 7, 7);
     }
     doc.setProperties({ title: limpa(d.titulo + ' · ' + (d.refCurta || '')), author: 'Ágil Soluções Aduaneiras', creator: 'Ágil Confere' });

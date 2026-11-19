@@ -470,7 +470,7 @@
     const url = URL.createObjectURL(x.file);
     const m = modal({
       titulo: 'Conferir leitura · ' + x.nome, largo: true,
-      corpo: `<div class="rv"><p class="sm">${x.leitura.origem === 'ocr' ? 'Documento <b>escaneado</b>: o texto foi reconhecido da imagem e pode ter dígitos trocados. Campos em amarelo foram lidos com pouca confiança.' : 'Documento lido do texto do PDF.'} Confira com o original e corrija o que estiver diferente. As correções ficam registradas no histórico. <a href="${url}" target="_blank" rel="noopener">Abrir o PDF original</a></p>${html}</div>`,
+      corpo: `<div class="rv"><p class="sm">${x.leitura.origem === 'ia' ? 'Documento <b>escaneado lido por IA</b>: os números foram copiados como estão impressos. Campos em amarelo são trechos que a IA não conseguiu ler com segurança.' : x.leitura.origem === 'ocr' ? 'Documento <b>escaneado</b>: o texto foi reconhecido da imagem e pode ter dígitos trocados. Campos em amarelo foram lidos com pouca confiança.' : 'Documento lido do texto do PDF.'} Confira com o original e corrija o que estiver diferente. As correções ficam registradas no histórico. <a href="${url}" target="_blank" rel="noopener">Abrir o PDF original</a></p>${html}</div>`,
       botoes: [{ txt: 'Cancelar' }, { txt: 'Confirmar leitura', cls: 'bt', acao: f => {
         const alt = [];
         $$('[data-c]', f).forEach(el => {

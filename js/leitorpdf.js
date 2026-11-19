@@ -216,6 +216,33 @@
     let usouOcr = false, somaConf = 0, nConf = 0, baixas = 0;
     const total = doc.numPages;
     if (total > 40) avisos.push(`PDF com ${total} páginas: li as 40 primeiras.`);
+    const IA = window.ConfereIA;
+    let comIA = !!(op.ia && IA && IA.disponivel(op.ia));
+    const filaIA = [];
+    async function ocrTesseract(page, vp, n) {
+      const esc = Math.min(3.5, (window.CONFERE_OCR_PX || 5000) / Math.max(vp.width, vp.height));
+      const fz = Math.max(1, Math.max(vp.width, vp.height) / 842);
+      let cv = await desenhar(page, esc);
+      const inclinacao = estimarInclinacao(cv);
+      if (Math.abs(inclinacao) >= 0.1) cv = girar(cv, inclinacao);
+      let reguas = detectarReguas(cv, esc, fz);
+      // muitas "linhas" = ruído da foto (furos, textura): não apaga nada antes do OCR
+      const limpo = reguas.h.length + reguas.v.length > 400 ? cv : apagarReguas(cv, reguas, esc);
+      if (limpo === cv) reguas = { h: [], v: [] };
+      op.progresso(`Reconhecendo o texto da página ${n} de ${total} (documento escaneado)…`);
+      const tokens = await ocrCanvas(limpo, esc, p => op.progresso(`Reconhecendo o texto da página ${n} de ${total}: ${Math.round((p || 0) * 100)}%`));
+      tokens.forEach(t => { if (t.conf != null) { somaConf += t.conf; nConf++; if (t.conf < 80) baixas++; } });
+      if (limpo !== cv) { limpo.width = limpo.height = 0; } cv.width = cv.height = 0;
+      return { tokens, reguas, inclinacao };
+    }
+    function guardar(n, vp, tokens, reguas, ocr, inclinacao) {
+      const f = Math.max(vp.width, vp.height) > 1300 ? Math.max(vp.width, vp.height) / 842 : 1;
+      if (f !== 1) {
+        tokens.forEach(t => { t.x0 /= f; t.x1 /= f; t.y0 /= f; t.y1 /= f; });
+        reguas.h.forEach(r => { r.y /= f; r.x0 /= f; r.x1 /= f; }); reguas.v.forEach(r => { r.x /= f; r.y0 /= f; r.y1 /= f; });
+      }
+      paginas.push({ numero: n, largura: vp.width / f, altura: vp.height / f, tokens, h: reguas.h, v: reguas.v, ocr, inclinacao });
+    }
     for (let n = 1; n <= Math.min(total, 40); n++) {
       op.progresso(`Lendo página ${n} de ${total}…`);
       const page = await doc.getPage(n);
@@ -224,39 +251,74 @@
       let tokens = palavrasDoTexto(tc, vp, lib);
       const caracteres = tokens.reduce((s, t) => s + t.t.replace(/\s/g, '').length, 0);
       const precisaOcr = op.ocr === 'sempre' || (op.ocr === 'auto' && caracteres < MIN_CARACTERES_TEXTO);
-      let reguas, inclinacao = 0;
       if (!precisaOcr) {
         const cv = await desenhar(page, 2);
-        reguas = detectarReguas(cv, 2);
+        const reguas = detectarReguas(cv, 2);
+        cv.width = cv.height = 0;
+        guardar(n, vp, tokens, reguas, false, 0);
+      } else if (comIA) {
+        // imagem para a IA: ~2.600 px no lado maior
+        const cv = await desenhar(page, Math.min(4, 2600 / Math.max(vp.width, vp.height)));
+        filaIA.push({ numero: n, imagem: IA._interno.imagemDaPagina(cv) });
         cv.width = cv.height = 0;
       } else {
         usouOcr = true;
-        const esc = Math.min(3.5, (window.CONFERE_OCR_PX || 5000) / Math.max(vp.width, vp.height));
-        const fz = Math.max(1, Math.max(vp.width, vp.height) / 842);
-        let cv = await desenhar(page, esc);
-        inclinacao = estimarInclinacao(cv);
-        if (Math.abs(inclinacao) >= 0.1) cv = girar(cv, inclinacao);
-        reguas = detectarReguas(cv, esc, fz);
-        // muitas "linhas" = ruído da foto (furos, textura): não apaga nada antes do OCR
-        const limpo = reguas.h.length + reguas.v.length > 400 ? cv : apagarReguas(cv, reguas, esc);
-        if (limpo === cv) reguas = { h: [], v: [] };
-        op.progresso(`Reconhecendo o texto da página ${n} de ${total} (documento escaneado)…`);
-        tokens = await ocrCanvas(limpo, esc, p => op.progresso(`Reconhecendo o texto da página ${n} de ${total}: ${Math.round((p || 0) * 100)}%`));
-        tokens.forEach(t => { if (t.conf != null) { somaConf += t.conf; nConf++; if (t.conf < 80) baixas++; } });
-        if (limpo !== cv) { limpo.width = limpo.height = 0; } cv.width = cv.height = 0;
+        const o = await ocrTesseract(page, vp, n);
+        guardar(n, vp, o.tokens, o.reguas, true, o.inclinacao);
       }
-      const f = Math.max(vp.width, vp.height) > 1300 ? Math.max(vp.width, vp.height) / 842 : 1;
-      if (f !== 1) {
-        tokens.forEach(t => { t.x0 /= f; t.x1 /= f; t.y0 /= f; t.y1 /= f; });
-        reguas.h.forEach(r => { r.y /= f; r.x0 /= f; r.x1 /= f; }); reguas.v.forEach(r => { r.x /= f; r.y0 /= f; r.y1 /= f; });
-      }
-      paginas.push({ numero: n, largura: vp.width / f, altura: vp.height / f, tokens, h: reguas.h, v: reguas.v, ocr: precisaOcr, inclinacao });
       page.cleanup();
     }
+    // leitura pela IA (páginas escaneadas)
+    let abasIA = [], custo = 0, paginasIA = 0, relidos = 0;
+    if (filaIA.length) {
+      let feitas = 0, falhou = null;
+      op.progresso(`Leitura por IA de ${filaIA.length} página(s) escaneada(s) (estimativa US$ ${(filaIA.length * IA.ESTIMATIVA_PAGINA).toFixed(2)})…`);
+      const res = await IA.emParalelo(filaIA.map(p => async () => {
+        if (falhou) return { numero: p.numero, erro: falhou };
+        try {
+          const r = await IA.lerPagina(p.imagem, { arquivo: op.nome, pagina: p.numero });
+          custo += r.custo || 0;
+          op.progresso(`Leitura por IA: ${++feitas} de ${filaIA.length} página(s)…`);
+          return { numero: p.numero, dados: r.pagina };
+        } catch (e) {
+          if (e.codigo === 'limite' || e.codigo === 'sem_chave' || e.codigo === 'desligada') falhou = e.message;
+          return { numero: p.numero, erro: e.message };
+        }
+      }), 4);
+      const okIA = res.filter(r => r.dados);
+      // conferência: itens que não fecham na conta são relidos uma vez
+      const susp = IA.suspeitos(okIA, op.nome);
+      if (susp.size) {
+        op.progresso(`Relendo ${[...susp.values()].reduce((a, x) => a + x.length, 0)} item(ns) que não fecharam na conta…`);
+        await IA.emParalelo([...susp.entries()].map(([pg, seqs]) => async () => {
+          const alvo = okIA.find(r => r.numero === pg), img = filaIA.find(p => p.numero === pg);
+          try {
+            const r = await IA.lerPagina(img.imagem, { arquivo: op.nome, pagina: pg, etapa: 'releitura', dica: `RELEITURA. Transcreva SOMENTE os itens de número ${seqs.join(', ')} desta página, conferindo dígito por dígito quantidade, preço unitário, valor total e pesos. Copie o que está impresso, mesmo que a conta do documento não feche.` });
+            custo += r.custo || 0;
+            relidos += IA.aplicarReleitura(alvo, r.pagina);
+          } catch (e) { /* mantém a primeira leitura */ }
+        }), 4);
+      }
+      abasIA = okIA.length ? IA.montarAbas(okIA, op.nome) : [];
+      paginasIA = okIA.length;
+      // páginas que a IA não leu voltam para o reconhecimento local
+      const sobras = res.filter(r => !r.dados);
+      if (sobras.length) {
+        avisos.push(`Leitura por IA indisponível em ${sobras.length} página(s) (${sobras[0].erro}). Usei o reconhecimento local, que é menos preciso.`);
+        for (const s of sobras) {
+          const page = await doc.getPage(s.numero), vp = page.getViewport({ scale: 1 });
+          usouOcr = true;
+          const o = await ocrTesseract(page, vp, s.numero);
+          guardar(s.numero, vp, o.tokens, o.reguas, true, o.inclinacao);
+          page.cleanup();
+        }
+        paginas.sort((a, b) => a.numero - b.numero);
+      }
+    }
     try { await tarefa.destroy(); } catch (e) { /* ok */ }
-    const r = C.pdfgrade.montar(paginas, { nome: op.nome });
+    const r = paginas.length ? C.pdfgrade.montar(paginas, { nome: op.nome }) : { abas: [], segmentos: [] };
     return {
-      abas: r.abas, segmentos: r.segmentos, paginas: paginas.length, ocr: usouOcr,
+      abas: abasIA.concat(r.abas), segmentos: r.segmentos, paginas: paginas.length + paginasIA, ocr: usouOcr, ia: paginasIA ? { paginas: paginasIA, custo, relidos } : null,
       confianca: nConf ? Math.round(somaConf / nConf) : null, palavrasDuvidosas: baixas,
       tempo: Math.round(performance.now() - t0), avisos, bruto: op.bruto ? paginas : undefined
     };
@@ -265,6 +327,29 @@
     const op = Object.assign({ nome: 'Imagem', progresso: () => {} }, opcoes || {});
     const t0 = performance.now();
     const bmp = await createImageBitmap(arquivo instanceof Blob ? arquivo : new Blob([arquivo]));
+    const IA = window.ConfereIA;
+    if (op.ia && IA && IA.disponivel(op.ia)) {
+      try {
+        const cv0 = document.createElement('canvas'); cv0.width = bmp.width; cv0.height = bmp.height;
+        cv0.getContext('2d').drawImage(bmp, 0, 0);
+        op.progresso('Leitura por IA da imagem…');
+        const imagem = IA._interno.imagemDaPagina(cv0); cv0.width = cv0.height = 0;
+        const r = await IA.lerPagina(imagem, { arquivo: op.nome, pagina: 1 });
+        let custo = r.custo || 0, relidos = 0;
+        const pg = [{ numero: 1, dados: r.pagina }];
+        const susp = IA.suspeitos(pg, op.nome);
+        if (susp.size) {
+          op.progresso('Relendo itens que não fecharam na conta…');
+          try {
+            const rr = await IA.lerPagina(imagem, { arquivo: op.nome, pagina: 1, etapa: 'releitura', dica: `RELEITURA. Transcreva SOMENTE os itens de número ${susp.get(1).join(', ')}, conferindo dígito por dígito quantidade, preço unitário, valor total e pesos. Copie o que está impresso, mesmo que a conta do documento não feche.` });
+            custo += rr.custo || 0; relidos = IA.aplicarReleitura(pg[0], rr.pagina);
+          } catch (e) { /* mantém a primeira leitura */ }
+        }
+        return { abas: IA.montarAbas(pg, op.nome), segmentos: [], paginas: 1, ocr: false, ia: { paginas: 1, custo, relidos }, confianca: null, palavrasDuvidosas: 0, tempo: Math.round(performance.now() - t0), avisos: [] };
+      } catch (e) {
+        op.aviso = `Leitura por IA indisponível (${e.message}). Usei o reconhecimento local, que é menos preciso.`;
+      }
+    }
     // escala para ~300 dpi em A4 (lado maior perto de 3500 px)
     const fator = Math.min(3, Math.max(1, 3500 / Math.max(bmp.width, bmp.height)));
     let cv = document.createElement('canvas'); cv.width = Math.round(bmp.width * fator); cv.height = Math.round(bmp.height * fator);
@@ -280,7 +365,7 @@
     let somaConf = 0, nConf = 0, baixas = 0;
     tokens.forEach(t => { if (t.conf != null) { somaConf += t.conf; nConf++; if (t.conf < 80) baixas++; } });
     const r = C.pdfgrade.montar([{ numero: 1, largura: cv.width / pts, altura: cv.height / pts, tokens, h: reguas.h, v: reguas.v, ocr: true, inclinacao: inc }], { nome: op.nome });
-    return { abas: r.abas, segmentos: r.segmentos, paginas: 1, ocr: true, confianca: nConf ? Math.round(somaConf / nConf) : null, palavrasDuvidosas: baixas, tempo: Math.round(performance.now() - t0), avisos: [] };
+    return { abas: r.abas, segmentos: r.segmentos, paginas: 1, ocr: true, confianca: nConf ? Math.round(somaConf / nConf) : null, palavrasDuvidosas: baixas, tempo: Math.round(performance.now() - t0), avisos: op.aviso ? [op.aviso] : [] };
   }
 
   window.ConfereLeitor = { lerPDF, lerImagem, _interno: { detectarReguas, estimarInclinacao, palavrasDoTexto, desenhar, pdfjs } };

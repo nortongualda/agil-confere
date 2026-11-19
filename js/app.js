@@ -5,6 +5,7 @@
   const CFG = window.AGIL_CONFIG;
   const C = window.Confere, U = C.util, R = C.regras, K = C.catalogo, D = C.descricao;
   const sb = window.supabase.createClient(CFG.url, CFG.key, { auth: { persistSession: true, autoRefreshToken: true, storageKey: 'agil-confere-auth' } });
+  window.AGIL_SB = sb;
   const SEM_CI = '(sem código interno)';
   const FASES = { pre_alerta: 'Pré-alerta', pre_registro: 'Pré-registro' };
   const TIPOS = { invoice_packing: 'Invoice + Packing List', invoice: 'Invoice', packing: 'Packing List', bl: 'Draft HBL', txt: 'TXT (TOTVS)', relatorio: 'Relatório de itens', diferimento: 'Planilha de diferimento de ICMS', ce: 'CE Mercante', outro: 'Outro' };
@@ -331,8 +332,10 @@
     const nome = file.name;
     if (/\.(pdf|jpe?g|png)$/i.test(nome)) {
       const ehPdf = /\.pdf$/i.test(nome);
-      const L = ehPdf ? await window.ConfereLeitor.lerPDF(buf, { nome, progresso }) : await window.ConfereLeitor.lerImagem(file, { nome, progresso });
-      const leitura = { origem: L.ocr ? 'ocr' : 'pdf', paginas: L.paginas, confianca: L.confianca, duvidosas: L.palavrasDuvidosas, tempo: L.tempo, segmentos: L.segmentos };
+      const ia = window.ConfereIA ? await window.ConfereIA.status() : null;
+      const L = ehPdf ? await window.ConfereLeitor.lerPDF(buf, { nome, progresso, ia }) : await window.ConfereLeitor.lerImagem(file, { nome, progresso, ia });
+      const leitura = { origem: L.ia && !L.ocr ? 'ia' : L.ocr ? 'ocr' : 'pdf', paginas: L.paginas, confianca: L.confianca, duvidosas: L.palavrasDuvidosas, tempo: L.tempo, segmentos: L.segmentos, ia: L.ia || null, avisos: L.avisos || [] };
+      if (L.ia && window.ConfereIA) window.ConfereIA.status(true);
       const base = { file, buf, hash, nome, leitura, abasPdf: L.abas };
       const rel = C.lerRelatorio(L.abas);
       if (rel.itens.length) return Object.assign(base, { tipo: 'relatorio', relatorio: rel });
@@ -340,6 +343,17 @@
       L.abas.forEach(a => { if (!a.titulo && (alvo === 'bl' || /\bBILL\s+OF\s+LADING\b/.test(U.norm(a.texto || '')))) a.titulo = 'bl'; });
       const abasBl = L.abas.filter(a => a.titulo === 'bl');
       const bl = abasBl.length ? C.lerBL(abasBl) : null;
+      // BL lido pela IA: o que o leitor não achou no layout vem direto dos campos transcritos
+      const cIA = (abasBl.find(a => a.ia) || {}).campos;
+      if (bl && cIA) {
+        const nb = x => { const m = /(\d[\d.,]*)/.exec(String(x || '')); return m ? U.num(C.pdfgrade.normalizarNumero(m[1], abasBl[0].formatoNumerico)) : null; };
+        if (bl.cab.container == null && cIA.container) bl.cab.container = String(cIA.container).replace(/\s/g, '');
+        if (bl.cab.lacre == null && cIA.lacre) bl.cab.lacre = cIA.lacre;
+        if (bl.cab.madeira == null && cIA.madeira) bl.cab.madeira = cIA.madeira;
+        if (bl.cab.freteModalidade == null && /PREPAID|COLLECT/i.test(cIA.freteModalidade || '')) bl.cab.freteModalidade = /PREPAID/i.test(cIA.freteModalidade) ? 'PREPAID' : 'COLLECT';
+        if (bl.cab.freeTime == null && cIA.freeTime && nb(cIA.freeTime) != null) bl.cab.freeTime = nb(cIA.freeTime);
+        if (bl.cab.pesoBruto == null && cIA.pesoBruto) bl.cab.pesoBruto = nb(cIA.pesoBruto);
+      }
       const com = C.lerDocumentosComerciais(L.abas.filter(a => a.titulo !== 'bl'));
       if (com.invoice || com.packing) return Object.assign(base, { tipo: com.invoice && com.packing ? 'invoice_packing' : com.invoice ? 'invoice' : 'packing', invoice: com.invoice, packing: com.packing, blJunto: bl, abas: com.abas });
       if (bl) return Object.assign(base, { tipo: 'bl', bl });
@@ -388,7 +402,8 @@
     const av = [].concat((x.txt && x.txt.avisos) || [], (x.invoice && x.invoice.avisos) || [], (x.bl && x.bl.avisos) || [], (x.relatorio && x.relatorio.avisos) || []);
     if (x.leitura && x.file) {
       const lt = x.leitura, pend = leituraPendente(x);
-      L.push(`<span class="sm">${lt.origem === 'ocr' ? `PDF escaneado lido por reconhecimento de texto (confiança média ${lt.confianca}%)` : 'Lido do PDF'} · ${lt.paginas} pág.</span>`);
+      L.push(`<span class="sm">${lt.origem === 'ia' ? `Documento escaneado lido por IA${lt.ia.relidos ? ` (${lt.ia.relidos} item(ns) relido(s) e corrigido(s))` : ''} · custo US$ ${lt.ia.custo.toFixed(2)}` : lt.origem === 'ocr' ? `PDF escaneado lido por reconhecimento de texto (confiança média ${lt.confianca}%)` : 'Lido do PDF'} · ${lt.paginas} pág.</span>`);
+      (lt.avisos || []).forEach(a => L.push(`<div class="warn">⚠ ${esc(a)}</div>`));
       L.push(x.revisado ? `<span class="sm" style="color:var(--ok)">✓ Leitura conferida por ${esc(nomeUsuario(x.revisado.por))}${x.revisado.alteracoes.length ? ` (${x.revisado.alteracoes.length} correção(ões))` : ''}</span> <button class="bt3" data-rev="${slot}">ver</button>`
         : `<button class="bt2" data-rev="${slot}" style="margin-top:4px">${pend ? '⚠ Conferir leitura (obrigatório)' : 'Conferir leitura'}</button>`);
     }
@@ -431,6 +446,7 @@
   function leituraPendente(x) {
     if (!x || !x.leitura || x.revisado || !docsDoSlot(x).length) return false;
     if (x.leitura.origem === 'ocr') return true;
+    if (x.leitura.origem === 'ia' && (x.abasPdf || []).some(a => (a.confs || []).some(r => (r || []).some(v => v != null && v < 80)))) return true;
     return docsDoSlot(x).some(([t, d]) => (t !== 'bl' && checagens(d, t).length) || OBRIG[t].some(c => { const v = pegar(d.cab, c); return v == null || v === ''; }));
   }
   function telaConferencia(slot, x, aoConfirmar) {
@@ -1107,8 +1123,10 @@
     if (EU.papel !== 'master') { view().innerHTML = '<div class="card empty">Somente usuários master.</div>'; return; }
     ACESSO = await dados(sb.from('confere_acesso').select('*').order('nome'));
     view().innerHTML = `<div class="top"><div><div class="eb">Configuração</div><h1 class="tt">Usuários e <span>acessos</span></h1><div class="sub">Cada analista entra com o próprio e-mail: o histórico registra quem fez cada análise. Quem já usa o Ágil Desk ou o Ágil Simula mantém o mesmo login e senha.</div></div></div>
+      <div class="card" id="iaCard"><h2>Leitura por IA de documentos escaneados</h2><div class="sm">Carregando…</div></div>
       <div class="card"><h2>Adicionar usuário</h2><div class="row r4"><div><label class="f">Nome</label><input class="in" id="uNo" placeholder="Juan Pablo"></div><div><label class="f">E-mail</label><input class="in" id="uEm" placeholder="operacional7@agiladuaneira.com.br"></div><div><label class="f">Papel</label><select class="in" id="uPa"><option value="analista">Analista</option><option value="master">Master</option></select></div><div><label class="f">Senha provisória</label><input class="in" id="uSe" placeholder="mín. 8 caracteres"></div></div><button class="bt" id="uAdd">Liberar acesso</button><span class="prog sm"> O usuário troca a senha no primeiro acesso.</span></div>
       <div class="card"><h2>Usuários</h2><table class="tb"><thead><tr><th>Nome</th><th>E-mail</th><th>Papel</th><th>Ativo</th><th></th></tr></thead><tbody>${ACESSO.map(u => `<tr data-u="${esc(u.email)}"><td><b>${esc(u.nome || '')}</b></td><td>${esc(u.email)}</td><td><select class="in" data-k="papel" style="max-width:150px"><option value="analista" ${u.papel === 'analista' ? 'selected' : ''}>Analista</option><option value="master" ${u.papel === 'master' ? 'selected' : ''}>Master</option></select></td><td><input type="checkbox" data-k="ativo" ${u.ativo ? 'checked' : ''}></td><td><button class="bt3" data-sen="${esc(u.email)}">Redefinir senha</button></td></tr>`).join('')}</tbody></table></div>`;
+    cartaoIA();
     const chamar = async corpo => {
       const { data, error } = await sb.functions.invoke('confere-usuarios', { body: corpo });
       if (error) { let m = error.message; try { const j = await error.context.json(); m = j.erro || m; } catch (x) { /* */ } throw new Error(m); }
@@ -1131,6 +1149,38 @@
     view().onclick = e => {
       const b = e.target.closest('[data-sen]'); if (!b) return;
       modal({ titulo: 'Redefinir senha', corpo: `<p class="sm">Nova senha provisória para <b>${esc(b.dataset.sen)}</b> (a pessoa troca no próximo acesso).</p><input class="in" id="nsP" placeholder="mín. 8 caracteres">`, botoes: [{ txt: 'Cancelar' }, { txt: 'Redefinir', cls: 'bt', acao: async f => { await chamar({ acao: 'redefinir', email: b.dataset.sen, senha: $('#nsP', f).value }); toast('Senha redefinida.'); } }] });
+    };
+  }
+
+  async function cartaoIA() {
+    const el = $('#iaCard'); if (!el) return;
+    const st = window.ConfereIA ? await window.ConfereIA.status(true) : {};
+    let cfg, usos;
+    try {
+    cfg = ((await dados(sb.from('confere_config').select('valor').eq('chave', 'leitura_ia'))) [0] || {}).valor || { ativa: true, limite_mensal_usd: 15, modelo: 'claude-sonnet-5-5' };
+    const ini = new Date(); ini.setDate(1); ini.setHours(0, 0, 0, 0);
+    usos = await dados(sb.from('confere_ia_uso').select('criado_em,usuario,arquivo,pagina,etapa,modelo,custo_usd,ok,erro').gte('criado_em', ini.toISOString()).order('criado_em', { ascending: false }).limit(300));
+    } catch (e) { el.innerHTML = '<h2>Leitura por IA de documentos escaneados</h2><div class="warn">⚠ As tabelas de controle de gasto ainda não foram criadas no banco. A leitura por IA fica desligada até isso ser feito.</div>'; return; }
+    const gasto = usos.reduce((a, u) => a + Number(u.custo_usd || 0), 0), pags = usos.filter(u => u.etapa === 'leitura' && u.ok).length;
+    const pct = cfg.limite_mensal_usd ? Math.min(100, gasto / cfg.limite_mensal_usd * 100) : 0;
+    el.innerHTML = `<h2>Leitura por IA de documentos escaneados</h2>
+      <p class="sm">PDFs com texto continuam sendo lidos de graça no navegador. Só as páginas escaneadas ou fotografadas vão para a IA (Claude, da Anthropic), que devolve cada número como está impresso. Itens que não fecham na conta são relidos automaticamente. Custo médio: cerca de US$ 0,05 por página com o modelo Sonnet.</p>
+      ${st.configurada ? '<div class="ok sm" style="margin:6px 0">✓ Chave da API configurada no servidor.</div>' : '<div class="warn">⚠ Falta configurar a chave da API da Anthropic no servidor (segredo ANTHROPIC_API_KEY das Edge Functions do Supabase). Enquanto isso, o sistema usa o reconhecimento local.</div>'}
+      <div class="row r4" style="margin-top:8px"><div><label class="f">Leitura por IA</label><select class="in" id="iaAt"><option value="1" ${cfg.ativa ? 'selected' : ''}>Ligada</option><option value="0" ${cfg.ativa ? '' : 'selected'}>Desligada</option></select></div>
+      <div><label class="f">Limite de gasto por mês (US$)</label><input class="in" id="iaLim" type="number" min="0" step="1" value="${esc(cfg.limite_mensal_usd)}"></div>
+      <div><label class="f">Modelo</label><select class="in" id="iaMod"><option value="claude-sonnet-5-5" ${cfg.modelo === 'claude-sonnet-5-5' ? 'selected' : ''}>Sonnet 5.5 (recomendado)</option><option value="claude-haiku-5-5" ${cfg.modelo === 'claude-haiku-5-5' ? 'selected' : ''}>Haiku 5.5 (mais barato, menos preciso)</option></select></div>
+      <div><label class="f">&nbsp;</label><button class="bt" id="iaSalvar">Salvar</button></div></div>
+      <div style="margin-top:10px"><b>Este mês:</b> US$ ${gasto.toFixed(2)} de US$ ${Number(cfg.limite_mensal_usd).toFixed(2)} · ${pags} página(s) lida(s)
+      <div style="height:8px;background:var(--line,#e5e7eb);border-radius:4px;margin-top:4px"><div style="height:8px;width:${pct}%;background:${pct > 85 ? 'var(--err,#c0392b)' : 'var(--ok,#2e7d32)'};border-radius:4px"></div></div>
+      <div class="sm" style="margin-top:4px">Ao atingir o limite, a leitura volta para o reconhecimento local até o mês virar ou o limite ser aumentado.</div></div>
+      ${usos.length ? `<details style="margin-top:8px"><summary class="sm">Últimas leituras</summary><div class="tbw"><table class="tb"><thead><tr><th>Quando</th><th>Usuário</th><th>Arquivo</th><th>Pág.</th><th>Etapa</th><th>US$</th><th></th></tr></thead><tbody>${usos.slice(0, 60).map(u => `<tr><td>${esc(new Date(u.criado_em).toLocaleString('pt-BR'))}</td><td>${esc(u.usuario)}</td><td>${esc(u.arquivo || '')}</td><td>${u.pagina || ''}</td><td>${u.etapa}</td><td>${Number(u.custo_usd).toFixed(3)}</td><td>${u.ok ? '' : `<span class="warn" title="${esc(u.erro || '')}">falhou</span>`}</td></tr>`).join('')}</tbody></table></div></details>` : ''}`;
+    $('#iaSalvar').onclick = async () => {
+      const lim = Number($('#iaLim').value);
+      if (!(lim >= 0)) { toast('Informe um limite válido.', true); return; }
+      try {
+        await dados(sb.from('confere_config').upsert({ chave: 'leitura_ia', valor: { ativa: $('#iaAt').value === '1', limite_mensal_usd: lim, modelo: $('#iaMod').value }, atualizado_por: EU.email, atualizado_em: new Date().toISOString() }));
+        toast('Configuração da leitura por IA salva.'); cartaoIA();
+      } catch (e) { toast(erroMsg(e), true); }
     };
   }
 

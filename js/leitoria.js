@@ -57,7 +57,7 @@
         return await chamar({ imagem, tipo: 'image/jpeg', arquivo: op.arquivo, pagina: op.pagina, dica: op.dica || '', etapa: op.etapa || 'leitura', estimativa: ESTIMATIVA_PAGINA });
       } catch (e) {
         ultimo = e;
-        if (e.codigo === 'limite' || e.codigo === 'sem_chave' || e.codigo === 'desligada') throw e;
+        if (e.codigo === 'limite' || e.codigo === 'sem_chave' || e.codigo === 'desligada' || e.codigo === 'api') throw e;
         await new Promise(r => setTimeout(r, 2500));
       }
     }

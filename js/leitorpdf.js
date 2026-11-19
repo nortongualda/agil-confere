@@ -281,7 +281,7 @@
           op.progresso(`Leitura por IA: ${++feitas} de ${filaIA.length} página(s)…`);
           return { numero: p.numero, dados: r.pagina };
         } catch (e) {
-          if (e.codigo === 'limite' || e.codigo === 'sem_chave' || e.codigo === 'desligada') falhou = e.message;
+          if (e.codigo === 'limite' || e.codigo === 'sem_chave' || e.codigo === 'desligada' || e.codigo === 'api') falhou = e.message;
           return { numero: p.numero, erro: e.message };
         }
       }), 4);

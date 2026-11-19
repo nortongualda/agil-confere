@@ -89,7 +89,7 @@ Regras:
 5. Campos de cabeçalho/rodapé: exportador, importador, shipper, consignee e notify recebem o bloco completo (nome, endereço, CNPJ/tax ID, contatos) com quebras de linha. incoterm recebe o texto completo (ex.: "FOB NINGBO"). frete/seguro/desconto: valor com o rótulo se houver. volumes: texto completo (ex.: "52 PALLETS"). marcas: shipping marks completas. madeira: a declaração sobre embalagem de madeira. Para BL: descricaoMercadoria recebe o texto completo da descrição das mercadorias (inclui NCMs, referências, cláusulas de frete e free time).
 6. "continuacao" = true quando a página só continua a tabela de uma página anterior.
 7. "texto" recebe o texto da página fora da tabela de itens (cabeçalho, blocos, rodapé, cláusulas), linha a linha, em ordem de leitura, com os valores exatos. Não repita ali as linhas de itens.
-Responda apenas chamando a ferramenta registrar_pagina.`;
+Responda sempre e somente chamando a ferramenta registrar_pagina, sem texto antes ou depois.`;
 
 Deno.serve(async (req: Request) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: cors });
@@ -133,7 +133,7 @@ Deno.serve(async (req: Request) => {
     const corpo = new ReadableStream({
       async start(ctrl) {
         const pulso = setInterval(() => { try { ctrl.enqueue(enc.encode(' ')); } catch (_) { /* fechado */ } }, 8000);
-        let resp: any = null, erro: string | null = null, tIn = 0, tOut = 0;
+        let resp: any = null, erro: string | null = null, codigo: string | null = null, tIn = 0, tOut = 0;
         try {
           const r = await fetch('https://api.anthropic.com/v1/messages', {
             method: 'POST',
@@ -143,7 +143,7 @@ Deno.serve(async (req: Request) => {
               max_tokens: 16000,
               system: INSTRUCOES,
               tools: [FERRAMENTA],
-              tool_choice: { type: 'tool', name: 'registrar_pagina' },
+              tool_choice: { type: 'auto' },
               messages: [{
                 role: 'user',
                 content: [
@@ -154,20 +154,28 @@ Deno.serve(async (req: Request) => {
             })
           });
           const j = await r.json();
-          if (!r.ok) erro = (j && j.error && j.error.message) || `Erro ${r.status} da API`;
+          if (!r.ok) { erro = (j && j.error && j.error.message) || `Erro ${r.status} da API`; if (r.status === 400 || r.status === 401 || r.status === 403) codigo = 'api'; }
           else {
             tIn = (j.usage && (j.usage.input_tokens + (j.usage.cache_read_input_tokens || 0) + (j.usage.cache_creation_input_tokens || 0))) || 0;
             tOut = (j.usage && j.usage.output_tokens) || 0;
-            const uso = (j.content || []).find((c: any) => c.type === 'tool_use');
-            if (!uso) erro = 'A IA não devolveu a transcrição.';
-            else resp = { ok: true, pagina: uso.input, parou: j.stop_reason };
+            const uso = (j.content || []).find((c: any) => c.type === 'tool_use' && c.name === 'registrar_pagina');
+            let pagina: any = uso ? uso.input : null;
+            if (!pagina) {
+              // resposta em texto: aproveita o JSON se vier fora da ferramenta
+              const t = (j.content || []).filter((c: any) => c.type === 'text').map((c: any) => c.text).join('\n');
+              const a = t.indexOf('{'), b = t.lastIndexOf('}');
+              if (a >= 0 && b > a) { try { pagina = JSON.parse(t.slice(a, b + 1)); } catch (_) { pagina = null; } }
+              if (pagina && !Array.isArray(pagina.secoes)) pagina = null;
+            }
+            if (!pagina) erro = 'A IA não devolveu a transcrição.';
+            else resp = { ok: true, pagina, parou: j.stop_reason };
             if (j.stop_reason === 'max_tokens') erro = 'Página longa demais para uma leitura (resposta cortada).';
           }
         } catch (e) { erro = String((e && (e as Error).message) || e); }
         const c = custo(modelo, tIn, tOut);
         await admin.from('confere_ia_uso').insert({ usuario: email, arquivo: String(body.arquivo || '').slice(0, 300), pagina: Number(body.pagina) || null, etapa, modelo, tokens_entrada: tIn, tokens_saida: tOut, custo_usd: c, ok: !erro, erro });
         clearInterval(pulso);
-        ctrl.enqueue(enc.encode(JSON.stringify(erro ? { erro, custo: c } : Object.assign(resp, { custo: c, tokens: { entrada: tIn, saida: tOut }, modelo }))));
+        ctrl.enqueue(enc.encode(JSON.stringify(erro ? { erro, codigo, custo: c } : Object.assign(resp, { custo: c, tokens: { entrada: tIn, saida: tOut }, modelo }))));
         ctrl.close();
       }
     });

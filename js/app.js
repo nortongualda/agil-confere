@@ -277,7 +277,7 @@
         <div class="acts"><button class="bt${u ? '2' : ''}" data-rodar="${fz}">${u ? 'Rodar com novos documentos' : 'Rodar fase'}</button>${u ? `<button class="bt" data-rean="${fz}" title="Mesmos documentos da última análise, com o catálogo e as regras atuais">Reanalisar</button>` : ''}</div></div>`; }).join('')}</div>
       <div class="card"><h2>Análises</h2><p class="cs">Cada análise guarda os documentos usados, o catálogo vigente na data e quem a realizou.</p>
       ${anals.length ? `<div class="tbw"><table class="tb"><thead><tr><th>Nº</th><th>Fase</th><th>Data</th><th>Analista</th><th>Resultado</th><th>Decisão</th><th>PDF para o cliente</th></tr></thead><tbody>${anals.map(a => `<tr class="cl" data-a="${a.id}"><td><b>${a.numero}</b></td><td>${FASES[a.fase]}</td><td>${dataHora(a.criado_em)}</td><td>${esc(a.analista_nome)}</td><td>${chipsResumo(a.resumo)}</td><td>${a.decisao ? (a.decisao === 'seguir' ? '<span class="badge sev-ok">Seguir</span>' : '<span class="badge sev-bloqueante">Não seguir</span>') : '<span class="mut sm">pendente</span>'}</td><td style="white-space:nowrap"><button class="bt3" data-gpdf="${a.id}" title="Montar o PDF para o cliente">${a.pdf_path ? 'refazer' : 'gerar'}</button>${a.pdf_path ? ` <button class="bt3" data-pdf="${esc(a.pdf_path)}">baixar</button>` : ''}</td></tr>`).join('')}</tbody></table></div>` : '<div class="empty">Nenhuma análise ainda.</div>'}</div>
-      <div class="card"><h2>Documentos enviados</h2>${docs.length ? `<table class="tb"><thead><tr><th>Tipo</th><th>Arquivo</th><th>Enviado por</th><th>Data</th><th></th></tr></thead><tbody>${docs.map(d => `<tr><td>${esc(TIPOS[d.tipo] || d.tipo)}</td><td>${esc(d.arquivo_nome)}</td><td>${esc(nomeUsuario(d.enviado_por))}</td><td>${dataHora(d.enviado_em)}</td><td>${d.storage_path ? `<button class="bt3" data-doc="${esc(d.storage_path)}" data-nome="${esc(d.arquivo_nome)}">baixar</button>` : ''}</td></tr>`).join('')}</tbody></table>` : '<div class="empty">Nenhum documento.</div>'}</div>
+      <div class="card"><h2>Documentos enviados</h2>${docs.length ? `<table class="tb"><thead><tr><th>Tipo</th><th>Arquivo</th><th>Enviado por</th><th>Data</th><th></th></tr></thead><tbody>${docs.map(d => `<tr><td>${esc(TIPOS[d.tipo] || d.tipo)}</td><td>${esc(d.arquivo_nome)}</td><td>${esc(nomeUsuario(d.enviado_por))}</td><td>${dataHora(d.enviado_em)}</td><td style="white-space:nowrap">${d.storage_path ? `<button class="bt3" data-doc="${esc(d.storage_path)}" data-nome="${esc(d.arquivo_nome)}">baixar</button>` : ''}${d.storage_path && /\.(pdf|jpe?g|png)$/i.test(d.arquivo_nome) && ['invoice', 'packing', 'invoice_packing', 'bl'].includes(d.tipo) ? ` <button class="bt3" data-reler="${d.id}" title="Lê de novo o arquivo já enviado, com o leitor atual">ler novamente</button>` : ''}</td></tr>`).join('')}</tbody></table>` : '<div class="empty">Nenhum documento.</div>'}</div>
       ${als.length ? `<div class="card"><h2>Histórico de alertas</h2><table class="tb"><thead><tr><th>Data</th><th>Código interno</th><th>Mudança</th><th>Status</th></tr></thead><tbody>${als.map(a => `<tr><td>${dataHora(a.criado_em)}</td><td class="mono">${esc(a.codigo_interno)}</td><td>${esc(ncmTexto(a.mensagem))}</td><td>${a.status === 'aberto' ? '<span class="badge sev-alerta">aberto</span>' : `<span class="badge sev-ok">resolvido</span><div class="sm mut">${esc(nomeUsuario(a.resolvido_por))} · ${esc(a.nota || '')}</div>`}</td></tr>`).join('')}</tbody></table></div>` : ''}`;
     $('#bNova').onclick = () => { location.hash = 'nova-' + p.id; };
     const rean = async fases => {
@@ -307,6 +307,7 @@
       const pdf = e.target.closest('[data-pdf]'); if (pdf) { e.stopPropagation(); return baixarArquivo(pdf.dataset.pdf, pdf.dataset.pdf.split('/').pop()); }
       const gp = e.target.closest('[data-gpdf]'); if (gp) { e.stopPropagation(); location.hash = 'a-' + gp.dataset.gpdf + '-pdf'; return; }
       const d = e.target.closest('[data-doc]'); if (d) return baixarArquivo(d.dataset.doc, d.dataset.nome);
+      const rl = e.target.closest('[data-reler]'); if (rl) return lerNovamente(p, docs.find(x => x.id === rl.dataset.reler));
       const tr = e.target.closest('tr[data-a]'); if (tr) location.hash = 'a-' + tr.dataset.a;
     };
     $('#bEdit').onclick = () => modal({
@@ -320,6 +321,40 @@
     });
     const bReab = $('#bReab');
     if (bReab) bReab.onclick = async () => { await dados(sb.from('confere_processos').update({ status: 'aberto', atualizado_em: new Date().toISOString() }).eq('id', p.id)); toast('Processo reaberto.'); rota(); };
+  }
+
+  // relê um documento já enviado (sem subir de novo); a leitura anterior fica guardada no histórico do documento
+  async function lerNovamente(p, d) {
+    if (!d) return;
+    const m = modal({ titulo: 'Ler novamente · ' + d.arquivo_nome, corpo: '<p class="sm" id="rlPr">Baixando o arquivo…</p>', botoes: [] });
+    const pr = t => { const e = $('#rlPr', m.el); if (e) e.textContent = t; };
+    try {
+      const { data: blob, error } = await sb.storage.from('confere').download(d.storage_path);
+      if (error) throw error;
+      const tipoMime = /\.pdf$/i.test(d.arquivo_nome) ? 'application/pdf' : /\.png$/i.test(d.arquivo_nome) ? 'image/png' : 'image/jpeg';
+      const file = new File([blob], d.arquivo_nome, { type: tipoMime });
+      const slot = d.tipo === 'invoice_packing' ? 'invoice' : d.tipo;
+      const x = await lerArquivo(file, pr, slot);
+      m.fechar();
+      if (x.tipo === 'erro' || x.tipo === 'outro') throw new Error(x.erro || x.aviso || 'Não foi possível ler o documento.');
+      // contagem de itens: compara com o outro documento comercial mais recente do processo
+      const outros = await dados(sb.from('confere_documentos').select('id,tipo,extraido').eq('processo_id', p.id).neq('id', d.id).in('tipo', ['invoice', 'packing', 'invoice_packing']).order('enviado_em', { ascending: false }));
+      const ref = {};
+      outros.forEach(o => { const e = o.extraido || {}; if (e.invoice && !ref.invoice) ref.invoice = e.invoice; if (e.packing && !ref.packing) ref.packing = e.packing; });
+      SLOTS_VIVOS = { ref, atual: x };
+      const salvar = async () => {
+        const [atual] = await dados(sb.from('confere_documentos').select('extraido').eq('id', d.id));
+        const ant = (atual && atual.extraido) || {};
+        const historico = (ant.historico || []).concat(ant.leitura ? [{ leitura: ant.leitura, substituidaEm: new Date().toISOString(), por: EU.email }] : []);
+        const extraido = { invoice: x.invoice || null, packing: x.packing || null, bl: x.bl || x.blJunto || null, txt: null, relatorio: null, diferimento: null, leitura: Object.assign({}, x.leitura, { revisado: x.revisado || null, relidaEm: new Date().toISOString(), relidaPor: EU.email }), historico };
+        await dados(sb.from('confere_documentos').update({ extraido }).eq('id', d.id));
+        SLOTS_VIVOS = null;
+        toast('Leitura atualizada. Agora use "Reanalisar" na fase deste documento.');
+        rota();
+      };
+      if (leituraPendente(x)) telaConferencia(slot, x, salvar);
+      else modal({ titulo: 'Leitura concluída', corpo: `<p>${resumoDoc(slot, x)}</p><p class="sm mut">Nada a conferir: itens, totais e numeração fecham. Quer substituir a leitura anterior por esta?</p>`, botoes: [{ txt: 'Cancelar' }, { txt: 'Conferir mesmo assim', cls: 'bt2', acao: () => { telaConferencia(slot, x, salvar); } }, { txt: 'Usar esta leitura', cls: 'bt', acao: salvar }] });
+    } catch (e) { m.fechar(); SLOTS_VIVOS = null; toast(erroMsg(e), true); }
   }
 
   /* ---------------- nova análise ---------------- */
@@ -426,21 +461,48 @@
   const pegar = (o, c) => c.split('.').reduce((a, k) => a == null ? null : a[k], o);
   function pôr(o, c, v) { const ks = c.split('.'); let a = o; ks.slice(0, -1).forEach(k => { if (a[k] == null || typeof a[k] !== 'object') a[k] = {}; a = a[k]; }); a[ks[ks.length - 1]] = v; }
   // conferência automática: o que não fecha pode ser erro de leitura ou do próprio documento
-  function checagens(doc, tipo) {
+  // conferência automática da leitura: o que não fecha pode ser erro de leitura ou do próprio documento
+  let SLOTS_VIVOS = null;
+  const casasDe = v => { const t = String(v == null ? '' : v); const m = /[.,](\d+)$/.exec(t); return m ? m[1].length : (Number.isInteger(Number(v)) ? 0 : (String(Number(v)).split('.')[1] || '').length); };
+  function outroDoc(tipo, x) {
+    const alvo = tipo === 'invoice' ? 'packing' : tipo === 'packing' ? 'invoice' : null;
+    if (!alvo) return null;
+    if (x && x[alvo]) return x[alvo];
+    const sl = SLOTS_VIVOS && Object.values(SLOTS_VIVOS).find(y => y && y !== x && y[alvo]);
+    return sl ? sl[alvo] : null;
+  }
+  function checagens(doc, tipo, x) {
     const out = [];
     if (!doc || !doc.itens) return out;
     const soma = k => doc.itens.reduce((a, i) => a + (i[k] || 0), 0);
+    const cols = (doc.cab && doc.cab.colIdx) || {};
+    const temCol = c => cols[c] != null || doc.itens.some(i => i[c] != null);
+    const nome = c => ({ qtd: 'quantidade', preco: 'preço', total: 'valor total', pesoLiq: 'peso líquido', pesoBruto: 'peso bruto' })[c];
+    const ref = (i, k) => i.seq != null ? i.seq : k + 1;
     doc.itens.forEach((i, k) => {
-      if (tipo === 'invoice' && i.qtd != null && i.preco != null && i.total != null && !U.iguais(i.qtd * i.preco, i.total, 2)) out.push({ k, campos: ['qtd', 'preco', 'total'], msg: `Item ${i.seq != null ? i.seq : k + 1}: ${U.fmtAuto(i.qtd, 5)} × ${U.fmtAuto(i.preco)} = ${U.fmt(i.qtd * i.preco)}, mas o total lido é ${U.fmt(i.total)}` });
-      ['qtd', 'pesoLiq', 'pesoBruto'].concat(tipo === 'invoice' ? ['preco', 'total'] : []).forEach(c => { if (i[c] == null) out.push({ k, campos: [c], msg: `Item ${i.seq != null ? i.seq : k + 1}: ${c === 'qtd' ? 'quantidade' : c === 'preco' ? 'preço' : c === 'total' ? 'total' : c === 'pesoLiq' ? 'peso líquido' : 'peso bruto'} não lido` }); });
-      if (i.pesoLiq != null && i.pesoBruto != null && i.pesoLiq > i.pesoBruto) out.push({ k, campos: ['pesoLiq', 'pesoBruto'], msg: `Item ${i.seq != null ? i.seq : k + 1}: peso líquido maior que o bruto` });
+      if (tipo === 'invoice' && i.qtd != null && i.preco != null && i.total != null) {
+        // diferença explicável pelo arredondamento do preço unitário impresso não é ponto de conferência
+        const tol = Math.abs(i.qtd) * 0.5 * Math.pow(10, -Math.max(casasDe(i.preco), 2)) + 0.005;
+        if (Math.abs(i.qtd * i.preco - i.total) > tol) out.push({ id: `conta|${ref(i, k)}`, k, campos: ['qtd', 'preco', 'total'], msg: `Item ${ref(i, k)}: ${U.fmtAuto(i.qtd, 5)} × ${U.fmtAuto(i.preco)} = ${U.fmt(i.qtd * i.preco)}, mas o total lido é ${U.fmt(i.total)}` });
+      }
+      ['qtd', 'pesoLiq', 'pesoBruto'].concat(tipo === 'invoice' ? ['preco', 'total'] : []).filter(temCol).forEach(c => { if (i[c] == null) out.push({ id: `vazio|${ref(i, k)}|${c}`, k, campos: [c], msg: `Item ${ref(i, k)}: ${nome(c)} não lido` }); });
+      if (i.pesoLiq != null && i.pesoBruto != null && i.pesoLiq > i.pesoBruto) out.push({ id: `peso|${ref(i, k)}`, k, campos: ['pesoLiq', 'pesoBruto'], msg: `Item ${ref(i, k)}: peso líquido maior que o bruto` });
     });
     const T = doc.totais || {};
     [['qtd', 'quantidade', 5], ['total', 'valor', 2], ['pesoLiq', 'peso líquido', 2], ['pesoBruto', 'peso bruto', 2]].forEach(([c, n, d]) => {
-      if (tipo !== 'invoice' && c === 'total') return;
-      if (T[c] == null) out.push({ tot: c, msg: `Total de ${n} não lido` });
-      else if (!U.iguais(T[c], soma(c), d)) out.push({ tot: c, msg: `Soma dos itens (${n}): ${U.fmtAuto(soma(c), d)}, total lido ${U.fmtAuto(T[c], d)}` });
+      if ((tipo !== 'invoice' && c === 'total') || !temCol(c)) return;
+      if (T[c] == null) out.push({ id: `tot|${c}|vazio`, tot: c, msg: `Total de ${n} não lido` });
+      else if (!U.iguais(T[c], soma(c), d)) out.push({ id: `tot|${c}`, tot: c, msg: `Soma dos itens (${n}): ${U.fmtAuto(soma(c), d)}, total impresso ${U.fmtAuto(T[c], d)}` });
     });
+    // numeração 1, 2, 3...: buraco é item pulado na leitura ou numeração do próprio documento
+    const ns = doc.itens.map(i => Number(i.seq)).filter(n => Number.isInteger(n) && n > 0);
+    if (ns.length > 3) {
+      const faltam = [];
+      for (let k = 1; k < ns.length; k++) if (ns[k] - ns[k - 1] > 1 && ns[k] - ns[k - 1] < 500) for (let f = ns[k - 1] + 1; f < ns[k]; f++) faltam.push(f);
+      if (faltam.length) out.push({ id: `num|${faltam.join(',')}`, msg: `Numeração dos itens: não foram lidos os nº ${faltam.length > 2 && faltam[faltam.length - 1] - faltam[0] === faltam.length - 1 ? faltam[0] + ' a ' + faltam[faltam.length - 1] : faltam.slice(0, 20).join(', ')}. Confira no PDF se o documento pula esses números.` });
+    }
+    const o = outroDoc(tipo, x);
+    if (o && o.itens && o.itens.length !== doc.itens.length) out.push({ id: `cont|${doc.itens.length}|${o.itens.length}`, msg: `${tipo === 'invoice' ? 'A invoice' : 'O packing list'} tem ${doc.itens.length} itens e ${tipo === 'invoice' ? 'o packing list' : 'a invoice'} tem ${o.itens.length}. Confira se algum item ficou de fora da leitura.` });
     return out;
   }
   function docsDoSlot(x) { return [['invoice', x.invoice], ['packing', x.packing], ['bl', x.bl || x.blJunto]].filter(([, d]) => d); }
@@ -448,7 +510,7 @@
     if (!x || !x.leitura || x.revisado || !docsDoSlot(x).length) return false;
     if (x.leitura.origem === 'ocr') return true;
     if (x.leitura.origem === 'ia' && (x.abasPdf || []).some(a => (a.confs || []).some(r => (r || []).some(v => v != null && v < 80)))) return true;
-    return docsDoSlot(x).some(([t, d]) => (t !== 'bl' && checagens(d, t).length) || OBRIG[t].some(c => { const v = pegar(d.cab, c); return v == null || v === ''; }));
+    return docsDoSlot(x).some(([t, d]) => (t !== 'bl' && checagens(d, t, x).length) || OBRIG[t].some(c => { const v = pegar(d.cab, c); return v == null || v === ''; }));
   }
   function telaConferencia(slot, x, aoConfirmar) {
     const docs = docsDoSlot(x);
@@ -469,10 +531,15 @@
       return `<div class="card"><h2>${esc(R.DOCS[t] || t)}${d.aba ? ` <span class="sm mut">(${esc(d.aba)})</span>` : ''}</h2><div class="ck" data-ck="${t}"></div><div class="kvr">${campos}${tots}</div>${itens}</div>`;
     }).join('');
     const url = URL.createObjectURL(x.file);
+    const confirmados = new Set((x.revisado && x.revisado.confirmados) || []);
+    const ckAtual = {};
     const m = modal({
       titulo: 'Conferir leitura · ' + x.nome, largo: true,
       corpo: `<div class="rv"><p class="sm">${x.leitura.origem === 'ia' ? 'Documento <b>escaneado lido por IA</b>: os números foram copiados como estão impressos. Campos em amarelo são trechos que a IA não conseguiu ler com segurança.' : x.leitura.origem === 'ocr' ? 'Documento <b>escaneado</b>: o texto foi reconhecido da imagem e pode ter dígitos trocados. Campos em amarelo foram lidos com pouca confiança.' : 'Documento lido do texto do PDF.'} Confira com o original e corrija o que estiver diferente. As correções ficam registradas no histórico. <a href="${url}" target="_blank" rel="noopener">Abrir o PDF original</a></p>${html}</div>`,
       botoes: [{ txt: 'Cancelar' }, { txt: 'Confirmar leitura', cls: 'bt', acao: f => {
+        atualizar();
+        const semDecisao = Object.entries(ckAtual).flatMap(([t, l]) => l.filter(c => !confirmados.has(t + '|' + c.id)));
+        if (semDecisao.length) { toast(`Faltam ${semDecisao.length} ponto(s) sem decisão: corrija o valor ou marque que o documento está assim.`, true); const el = $('.ckbox', f); if (el) el.scrollIntoView({ block: 'center' }); return false; }
         const alt = [];
         $$('[data-c]', f).forEach(el => {
           const d = docs.find(([t]) => t === el.dataset.d)[1];
@@ -485,7 +552,8 @@
           if (!igual) { alt.push({ documento: el.dataset.d, item: el.dataset.k != null ? (alvo.codigo || alvo.seq || +el.dataset.k + 1) : null, campo: c, antes: antes == null ? null : String(antes), depois: v == null ? null : String(v) }); pôr(alvo, c, v); }
         });
         docs.forEach(([t, d]) => { if (t === 'bl') { const D = d.cab.descricaoCompleta || ''; d.cab.descricao = (D.split(/\r?\n/).find(z => z.trim()) || '').trim(); } else if (d.cab.importador && d.cab.importador.cnpj) d.cab.importador.cnpj = String(d.cab.importador.cnpj).replace(/\D/g, ''); });
-        x.revisado = { por: EU.email, em: new Date().toISOString(), alteracoes: alt };
+        const conf = Object.entries(ckAtual).flatMap(([t, l]) => l.filter(c => confirmados.has(t + '|' + c.id)).map(c => ({ documento: t, id: c.id, ponto: c.msg })));
+        x.revisado = { por: EU.email, em: new Date().toISOString(), alteracoes: alt, confirmados: [...confirmados], pontosConfirmados: conf };
         URL.revokeObjectURL(url);
         toast(alt.length ? `Leitura conferida com ${alt.length} correção(ões).` : 'Leitura conferida.');
         if (aoConfirmar) aoConfirmar();
@@ -496,14 +564,18 @@
         if (t === 'bl') { const vz = $$(`[data-d="bl"][data-ob]`, m.el).filter(el => { const v = !el.value.trim(); el.classList.toggle('vaz', v); return v; }).length; $('[data-ck="bl"]', m.el).innerHTML = vz ? `<b>${vz} campo(s) obrigatório(s) em branco</b> (em laranja): se a informação aparece no documento, preencha; se não aparece, deixe em branco que vira ocorrência.` : '<span class="okk">✓ Campos principais preenchidos.</span>'; return; }
         const tmp = { itens: d.itens.map((i, k) => { const o = Object.assign({}, i); $$(`[data-d="${t}"][data-k="${k}"]`, m.el).forEach(el => { if (el.dataset.t === 'n') o[el.dataset.c] = el.value.trim() === '' ? null : U.num(el.value); }); return o; }), totais: {} };
         $$(`[data-d="${t}"][data-c^="totais."]`, m.el).forEach(el => { tmp.totais[el.dataset.c.slice(7)] = el.value.trim() === '' ? null : U.num(el.value); });
-        const ck = checagens(tmp, t);
+        tmp.cab = d.cab;
+        const ck = checagens(tmp, t, x);
+        ckAtual[t] = ck;
         $$(`[data-d="${t}"]`, m.el).forEach(el => el.classList.remove('err'));
         ck.forEach(c => { if (c.tot) { const el = $(`[data-d="${t}"][data-c="totais.${c.tot}"]`, m.el); if (el) el.classList.add('err'); } else c.campos.forEach(cp => { const el = $(`[data-d="${t}"][data-k="${c.k}"][data-c="${cp}"]`, m.el); if (el) el.classList.add('err'); }); });
         const vazios = $$(`[data-d="${t}"][data-ob]`, m.el).filter(el => { const v = !el.value.trim(); el.classList.toggle('vaz', v); return v; }).length;
-        $(`[data-ck="${t}"]`, m.el).innerHTML = (vazios ? `<b>${vazios} campo(s) obrigatório(s) em branco</b> (em laranja): se a informação aparece no documento, preencha; se não aparece, deixe em branco que vira ocorrência.<br>` : '') + (ck.length ? `<b>${ck.length} ponto(s) para conferir</b> (erro de leitura ou divergência do próprio documento; se o documento estiver assim, deixe como está que vira ocorrência):<br>${ck.slice(0, 12).map(c => '• ' + esc(c.msg)).join('<br>')}${ck.length > 12 ? '<br>…' : ''}` : '<span class="okk">✓ Itens e totais fecham.</span>');
+        const pend = ck.filter(c => !confirmados.has(t + '|' + c.id)).length;
+        $(`[data-ck="${t}"]`, m.el).innerHTML = (vazios ? `<b>${vazios} campo(s) obrigatório(s) em branco</b> (em laranja): se a informação aparece no documento, preencha; se não aparece, deixe em branco que vira ocorrência.<br>` : '') + (ck.length ? `<div class="ckbox"><b>${ck.length} ponto(s) para conferir</b>${pend ? ` · <span style="color:var(--err)">${pend} sem decisão</span>` : ' · <span style="color:var(--ok)">todos decididos</span>'}<div class="sm">Para cada ponto: se for erro de leitura, corrija o valor na tabela abaixo; se o documento estiver assim, marque a caixa (o ponto vira ocorrência na análise).</div>${ck.map(c => `<label class="ckl"><input type="checkbox" data-conf="${esc(t + '|' + c.id)}" ${confirmados.has(t + '|' + c.id) ? 'checked' : ''}> ${esc(c.msg)} <span class="mut">· conferi no PDF: o documento está assim</span></label>`).join('')}${ck.length > 1 ? `<button class="bt3" type="button" data-conf-todos="${t}">Marcar todos como conferidos no PDF</button>` : ''}</div>` : '<span class="okk">✓ Itens, totais e numeração fecham.</span>');
       });
     };
-    m.el.addEventListener('input', atualizar);
+    m.el.addEventListener('input', e => { const c = e.target.closest && e.target.closest('[data-conf]'); if (c) { if (c.checked) confirmados.add(c.dataset.conf); else confirmados.delete(c.dataset.conf); } atualizar(); });
+    m.el.addEventListener('click', e => { const b = e.target.closest('[data-conf-todos]'); if (!b) return; (ckAtual[b.dataset.confTodos] || []).forEach(c => confirmados.add(b.dataset.confTodos + '|' + c.id)); atualizar(); });
     atualizar();
   }
 
@@ -513,6 +585,7 @@
     await carregarCatalogo();
     await carregarRegras();
     const S = { proc: procId || '', fase: faseQ === 'pre_registro' ? 'pre_registro' : 'pre_alerta', slots: {}, anteriores: {} };
+    SLOTS_VIVOS = S.slots;
     view().innerHTML = `<div class="top"><div><div class="eb">Nova análise</div><h1 class="tt">Conferência <span>documental</span></h1><div class="sub">Envie os documentos, rode a análise e trate as ocorrências. Sem tolerância: qualquer divergência vira ocorrência.</div></div></div>
       <div class="card"><h2><span class="n">1</span>Processo</h2><p class="cs">Escolha um processo em aberto ou crie um novo pela referência do cliente (IP).</p>
       <div class="row r3"><div><label class="f">Processo existente</label><select class="in" id="nProc"><option value="">+ Novo processo</option>${procs.map(p => `<option value="${p.id}" ${p.id === procId ? 'selected' : ''}>IP ${esc(p.ref_cliente)}${p.ref_agil ? ' · ' + esc(p.ref_agil) : ''}${p.status !== 'aberto' ? ' (' + p.status + ')' : ''}</option>`).join('')}</select></div>
@@ -592,11 +665,36 @@
   }
 
   // roda as regras e grava análise, itens e ocorrências (usado por "Rodar análise" e por "Reanalisar")
-  async function gravarAnalise(proc, fase, docs, usados, passo) {
+  // leitura de PDF com ponto sem decisão: ocorrências de conta, soma e itens daquele documento ficam como dúvida de leitura (internas, fora do PDF do cliente)
+  const SENSIVEIS_LEITURA = new Set(['INV-07', 'INV-09', 'INV-14', 'PKL-02', 'PKL-03', 'TOT-01', 'ITM-01', 'ITM-03']);
+  function pendenciasLeitura(docs, leituras) {
+    const out = {};
+    ['invoice', 'packing'].forEach(t => {
+      const l = leituras && leituras[t];
+      if (!docs[t] || !l || !l.origem || l.origem === 'planilha') return;
+      const conf = new Set(l.confirmados || []);
+      const p = checagens(docs[t], t, { invoice: docs.invoice, packing: docs.packing }).filter(c => !conf.has(t + '|' + c.id));
+      if (p.length) out[t] = p.map(c => c.msg);
+    });
+    return out;
+  }
+  async function gravarAnalise(proc, fase, docs, usados, passo, leituras) {
     passo('Conferindo documentos…');
     await carregarRegras();
     const desl = (REGRAS_DB || []).filter(r => !r.ativa).map(r => r.codigo);
     const resultado = C.analisar({ fase, processo: { refCliente: proc.ref_cliente, refAgil: proc.ref_agil, cnpj: IMP.cnpj }, docs, catalogo: CAT || null, regrasDesligadas: desl, severidades: Object.fromEntries((REGRAS_DB || []).map(r => [r.codigo, r.severidade])) });
+      const pl = pendenciasLeitura(docs, leituras);
+      if (Object.keys(pl).length) {
+        resultado.leituraPendente = pl;
+        resultado.achados.forEach(a => {
+          if (!SENSIVEIS_LEITURA.has(a.regra)) return;
+          const alvo = a.documento === 'packing' || /^PKL/.test(a.regra) ? 'packing' : (a.documento === 'invoice' || a.regra === 'ITM-01' || a.regra === 'ITM-03') ? 'invoice' : null;
+          if (!alvo || !pl[alvo]) return;
+          a.interna = true; a.incluirPdf = false; a.duvidaLeitura = true;
+          a.mensagem = 'Possível erro de leitura (conferência da leitura com pontos sem decisão): ' + a.mensagem;
+        });
+        resultado.resumo.leituraPendente = Object.fromEntries(Object.entries(pl).map(([k, v]) => [k, v.length]));
+      }
       passo('Gravando a análise…');
       const [an] = await dados(sb.from('confere_analises').insert({ processo_id: proc.id, fase: fase, catalogo_versao_id: CAT ? CAT.meta.versaoId : null, documentos: usados, resultado, resumo: resultado.resumo }).select('id,numero'));
       const itens = resultado.itens.filter(o => !o.codigo.startsWith('#')).map(o => {
@@ -625,7 +723,9 @@
       ['invoice', 'packing', 'bl', 'txt', 'diferimento'].forEach(k => { if (e[k] && !docs[k]) docs[k] = e[k]; });
       usados.push({ id: d.id, tipo: d.tipo, arquivo_nome: d.arquivo_nome, hash: d.arquivo_hash, reaproveitado: true });
     });
-    return gravarAnalise(proc, fase, docs, usados, passo);
+    const leituras = {};
+    ds.forEach(d => { const e = d.extraido || {}; const l = e.leitura; if (!l) return; ['invoice', 'packing'].forEach(k => { if (e[k] && !leituras[k]) leituras[k] = { origem: l.origem, confirmados: (l.revisado && l.revisado.confirmados) || [] }; }); });
+    return gravarAnalise(proc, fase, docs, usados, passo, leituras);
   }
 
   async function rodar(S, procs) {
@@ -690,7 +790,10 @@
         const [d] = await dados(sb.from('confere_documentos').insert({ processo_id: proc.id, tipo: x.tipo === 'erro' ? 'outro' : x.tipo, arquivo_nome: x.nome, arquivo_hash: x.hash, tamanho: x.file.size, storage_path: caminho, extraido }).select('id,tipo,arquivo_nome,arquivo_hash'));
         usados.push({ id: d.id, tipo: d.tipo, arquivo_nome: d.arquivo_nome, hash: d.arquivo_hash });
       }
-      const an = await gravarAnalise(proc, S.fase, docs, usados, passo);
+      const leituras = {};
+      Object.values(S.slots).forEach(x => { if (!x || x.erro || !x.leitura) return; ['invoice', 'packing'].forEach(k => { if (x[k] && !leituras[k]) leituras[k] = { origem: x.leitura.origem, confirmados: (x.revisado && x.revisado.confirmados) || [] }; }); });
+      for (const k of ['invoice', 'packing']) { const a = S.anteriores[k]; if (!leituras[k] && a && a.usar) { const [d] = await dados(sb.from('confere_documentos').select('extraido').eq('id', a.id)); const l = d && d.extraido && d.extraido.leitura; if (l) leituras[k] = { origem: l.origem, confirmados: (l.revisado && l.revisado.confirmados) || [] }; } }
+      const an = await gravarAnalise(proc, S.fase, docs, usados, passo, leituras);
       passo('');
       location.hash = 'a-' + an.id + '-nova';
       contadores();
@@ -752,6 +855,7 @@
       <div class="sub">${dataHora(a.criado_em)} · por <b>${esc(a.analista_nome)}</b> · catálogo ${r.resumo && r.resumo.catalogo ? `de ${dataHora(r.resumo.catalogo.geradoEm)}` : 'não carregado'} · motor ${esc(r.versaoMotor || '')}<br>${esc(docsTxt)}</div></div>
       <div class="acts"><button class="bt" id="bPdf">PDF para o cliente</button><button class="bt2" id="bTxt">Copiar texto</button><button class="bt2" onclick="location.hash='p-${p.id}'">Abrir processo</button><button class="bt2" onclick="location.hash='nova-${p.id}'">Nova análise</button></div></div>
       <div id="decisao"></div>
+      ${r.leituraPendente ? `<div class="banner al"><div><div class="t">Leitura com pontos sem decisão: ${Object.entries(r.leituraPendente).map(([k, v]) => `${esc(R.DOCS[k] || k)} (${v.length})`).join(', ')}</div><div class="d">As ocorrências de conta, soma e itens desses documentos ficaram como <b>possível erro de leitura</b>: internas e fora do PDF do cliente. Use "Ler novamente" no processo ou rode a fase com o documento e faça a conferência da leitura. Pontos: ${esc(Object.values(r.leituraPendente).flat().slice(0, 4).join('; '))}${Object.values(r.leituraPendente).flat().length > 4 ? '…' : ''}</div></div></div>` : ''}
       <div class="kpis"><div class="kpi"><b>${rs.bloqueantes || 0}</b><span>Bloqueantes</span></div><div class="kpi"><b>${rs.alertas || 0}</b><span>Alertas</span></div><div class="kpi"><b>${rs.infos || 0}</b><span>Informativos</span></div><div class="kpi"><b>${rs.itens || 0}</b><span>Itens conferidos${rs.itensComPendencia ? ` (${rs.itensComPendencia} com pendência)` : ''}</span></div></div>
       <div class="tabs2"><button class="on" data-t="oc">Ocorrências (${ocs.length})</button><button data-t="it">Itens (${(r.itens || []).length})</button><button data-t="ct">Catálogo</button><button data-t="dc">Documentos lidos</button></div>
       <div id="tOc"></div><div id="tIt" class="hide"></div><div id="tCt" class="hide"></div><div id="tDc" class="hide"></div>`;
